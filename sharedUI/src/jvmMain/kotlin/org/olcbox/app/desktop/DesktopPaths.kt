@@ -37,7 +37,7 @@ internal object DesktopPaths {
             DesktopOs.MacOS -> home.resolve("Library").resolve("Application Support").resolve("Olcbox")
             DesktopOs.Windows -> {
                 val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
-                (appData?.let { Path(it) } ?: home.resolve("AppData").resolve("Roaming")).resolve("Olcbox")
+                (appData?.let { Path(it) } ?: home.resolve("AppData").resolve("Roaming")).resolve("ИлюхаLine")
             }
             DesktopOs.Linux,
             DesktopOs.Other -> home.resolve(".olcbox")

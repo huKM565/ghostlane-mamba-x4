@@ -6,14 +6,11 @@ import kotlin.test.assertEquals
 
 class IlyukhaLinePaletteTest {
     @Test
-    fun colorsMatchIlyukhaLineCyanAndOrangeTheme() {
-        val scheme = OlcboxDarkColorScheme
-        assertEquals(Color(0xFF22D3EE), scheme.primary)
-        assertEquals(Color(0xFF103743), scheme.primaryContainer)
-        assertEquals(Color(0xFFFF8A65), scheme.tertiary)
-
-        val palette = PkPalette()
-        assertEquals(Color(0xFF22D3EE), palette.accent)
-        assertEquals(Color(0xFFFF8A65), palette.accent2)
+    fun forkUsesCyanAndOrangeInsteadOfGhostlaneColors() {
+        assertEquals(Color(0xFF22D3EE), OlcboxDarkColorScheme.primary)
+        assertEquals(Color(0xFF103743), OlcboxDarkColorScheme.primaryContainer)
+        assertEquals(Color(0xFFFF8A65), OlcboxDarkColorScheme.tertiary)
+        assertEquals(Color(0xFF22D3EE), PkPalette().accent)
+        assertEquals(Color(0xFFFF8A65), PkPalette().accent2)
     }
 }
