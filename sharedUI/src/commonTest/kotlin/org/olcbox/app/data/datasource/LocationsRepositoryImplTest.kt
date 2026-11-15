@@ -2330,6 +2330,74 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun importsBondedMambaAndSeparateVkCalls() = runTest {
+        val source = FakeLocationsDataSource()
+        val key = "a".repeat(64)
+        val vless = "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000" +
+            "?security=none&encryption=none#VLESS"
+        val input = """
+            olcrtc://jitsi?datachannel@mamba-1#$key${'$'}Mamba x4
+            ##rooms: mamba-2, mamba-3, mamba-4
+            ##bond-vless: $vless
+            olcrtc://vkcalls?vp8channel@https://vk.ru/call/join/test#$key${'$'}VK Calls
+        """.trimIndent()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(input))
+
+        val entries = source.stored?.locations.orEmpty()
+        assertEquals(2, entries.size)
+        val mamba = entries[0].location
+        assertEquals(vless, mamba.bondVlessLink)
+        assertEquals(listOf("mamba-1", "mamba-2", "mamba-3", "mamba-4"), mamba.bondedRooms())
+        assertEquals(vless, entries[0].bondVlessLink)
+        val vk = entries[1].location
+        assertEquals(LocationConfig.PROVIDER_VKCALLS, vk.bypassProvider)
+        assertNull(vk.bondVlessLink)
+        assertEquals(emptyList(), vk.bondedRooms())
+    }
+
+    @Test
+    fun invalidBondCannotFallBackToOneRoomOrFailover() = runTest {
+        val key = "a".repeat(64)
+        val vless = "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000?security=none#VLESS"
+        val inputs = listOf(
+            "olcrtc://jitsi?datachannel@mamba-1#$key${'$'}Mamba\n##rooms: mamba-2, mamba-3\n##bond-vless: $vless",
+            "olcrtc://jitsi?datachannel@mamba-1#$key${'$'}Mamba\n##rooms: mamba-2, mamba-3, mamba-4\n##bond-vless: invalid",
+        )
+
+        for (input in inputs) {
+            val source = FakeLocationsDataSource()
+            val repo = LocationsRepositoryImpl(source)
+
+            repo.importText(input)
+
+            assertTrue(repo.getAllLocations().isEmpty())
+            assertNull(source.stored?.activeLocationId)
+        }
+    }
+
+    @Test
+    fun refreshReplacesTheBondWithWhatTheServerAdvertisesNow() = runTest {
+        val key = "a".repeat(64)
+        fun body(uuid: String, rooms: String) = """
+            olcrtc://jitsi?datachannel@mamba-1#$key${'$'}Mamba x4
+            ##rooms: $rooms
+            ##bond-vless: vless://$uuid@127.0.0.1:10000?security=none&encryption=none#VLESS
+        """.trimIndent()
+        var body = body("11111111-1111-1111-1111-111111111111", "mamba-2, mamba-3, mamba-4")
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(body) }))
+        assertTrue(repo.importText("https://example.test/sub"))
+
+        body = body("22222222-2222-2222-2222-222222222222", "mamba-5, mamba-6, mamba-7")
+        repo.refreshSubscriptions()
+
+        val location = repo.getActiveLocation()?.location
+        assertEquals(listOf("mamba-1", "mamba-5", "mamba-6", "mamba-7"), location?.bondedRooms())
+        assertTrue(location?.bondVlessLink?.contains("22222222-2222-2222-2222-222222222222") == true)
+    }
+
+    @Test
     fun refreshReplacesTheFailoverRoomsWithWhatTheServerAdvertisesNow() = runTest {
         val key = "c".repeat(64)
         var body = "olcrtc://telemost?vp8channel@R1#$key${'$'}Room\n##rooms: R2"

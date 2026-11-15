@@ -1671,7 +1671,7 @@ class LocationsRepositoryImpl(
             .withSubscriptionInterval(updateIntervalHours)
         val usedStorageIds = mutableSetOf<String>()
 
-        val entries = locations.mapIndexed { index, (parsed, fields) ->
+        val entries = locations.mapIndexedNotNull { index, (parsed, fields) ->
             val metadata = buildLocationMetadata(
                 fields = fields,
                 mimo = parsed.mimo,
@@ -1684,8 +1684,10 @@ class LocationsRepositoryImpl(
                     parsed.mimo,
                     parsed.location.name
                 ),
-                failoverRoomIds = parseFailoverRooms(fields["rooms"])
+                failoverRoomIds = parseFailoverRooms(fields["rooms"]),
+                bondVlessLink = fields["bond-vless"]?.trim()?.takeIf { it.isNotBlank() }
             ).normalized()
+            if (!location.isComplete()) return@mapIndexedNotNull null
             val base = location.storageSlug().ifBlank { "location_${index + 1}" }
             val storageId = uniqueStorageId("imported_$base", usedStorageIds)
             LocationEntry.from(
@@ -1695,6 +1697,8 @@ class LocationsRepositoryImpl(
                 metadata = metadata
             )
         }
+
+        if (entries.isEmpty()) return null
 
         return LocationBundleV4(
             activeLocationId = entries.firstOrNull()?.storageId,

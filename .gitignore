@@ -52,3 +52,4 @@ __pycache__/
 # Logs and hand-made backups (sing-box writes its log where it is started)
 *.log
 *.bak-*
+.superpowers/

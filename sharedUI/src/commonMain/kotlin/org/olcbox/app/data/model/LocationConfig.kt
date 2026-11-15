@@ -41,7 +41,9 @@ data class LocationConfig(
      * The engine hops to them when the room it is in ends.
      */
     @SerialName("failover_rooms")
-    val failoverRoomIds: List<String> = emptyList()
+    val failoverRoomIds: List<String> = emptyList(),
+    @SerialName("bond_vless")
+    val bondVlessLink: String? = null
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -57,7 +59,8 @@ data class LocationConfig(
             failoverRoomIds = failoverRoomIds
                 .map { it.trim() }
                 .filter { it.isNotBlank() && it != id.trim() }
-                .distinct()
+                .distinct(),
+            bondVlessLink = bondVlessLink?.trim()
         )
     }
 
@@ -67,10 +70,17 @@ data class LocationConfig(
         .filter { it.isNotBlank() }
         .distinct()
 
+    fun bondedRooms(): List<String> = if (bondVlessLink == null) emptyList() else failoverRooms()
+
     fun isComplete(): Boolean = when (kind) {
-        LocationKind.Olcrtc -> id.isNotBlank() && key.isNotBlank()
+        LocationKind.Olcrtc -> id.isNotBlank() && key.isNotBlank() && hasValidBond()
         LocationKind.Vless, LocationKind.Hysteria2, LocationKind.Trojan, LocationKind.Shadowsocks, LocationKind.Vmess ->
             rawLink?.let { LinkParser.parse(it) != null } ?: false
+    }
+
+    private fun hasValidBond(): Boolean {
+        val link = bondVlessLink ?: return true
+        return bondedRooms().size == 4 && LinkParser.parse(link) is OutboundSpec.Vless
     }
 
     /**
@@ -562,7 +572,9 @@ data class LocationEntry(
     @SerialName("kind")
     val kind: LocationKind = LocationKind.Olcrtc,
     @SerialName("raw_link")
-    val rawLink: String? = null
+    val rawLink: String? = null,
+    @SerialName("bond_vless")
+    val bondVlessLink: String? = null
 ) {
     val location: LocationConfig
         get() {
@@ -591,7 +603,8 @@ data class LocationEntry(
                     ?: LocationConfig.DEFAULT_VP8_BATCH,
                 kind = kind,
                 rawLink = rawLink,
-                failoverRoomIds = failoverRooms
+                failoverRoomIds = failoverRooms,
+                bondVlessLink = bondVlessLink
             ).normalized()
         }
 
@@ -616,7 +629,8 @@ data class LocationEntry(
                 ?.normalized()
                 ?.takeUnless { it.isEmpty() },
             kind = config.kind,
-            rawLink = config.rawLink
+            rawLink = config.rawLink,
+            bondVlessLink = config.bondVlessLink
         )
     }
 
@@ -643,7 +657,8 @@ data class LocationEntry(
                 transport = LocationTransportConfig.from(config),
                 metadata = metadata,
                 kind = config.kind,
-                rawLink = config.rawLink
+                rawLink = config.rawLink,
+                bondVlessLink = config.bondVlessLink
             ).normalized()
         }
 
