@@ -44,6 +44,9 @@ import org.olcbox.app.net.DesktopSingBoxController
 import org.olcbox.app.net.DesktopXrayController
 import org.olcbox.app.net.TransportProbe
 import org.olcbox.app.net.LinkParser
+import org.olcbox.app.net.OutboundSpec
+import org.olcbox.app.net.SingBoxConfig
+import org.olcbox.app.net.XrayConfig
 import org.olcbox.app.net.LocationKind
 import org.olcbox.app.net.OlcrtcDirectRules
 import org.olcbox.app.net.OlcrtcDtls
@@ -80,6 +83,7 @@ import org.olcbox.app.vpn.desktop.SessionBuild
 import org.olcbox.app.vpn.desktop.SessionEndpoint
 import org.olcbox.app.vpn.desktop.SingBoxTunTraffic
 import org.olcbox.app.vpn.desktop.TunnelTraffic
+import org.olcbox.app.vpn.desktop.DesktopOlcRtcBond
 import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -240,6 +244,8 @@ class DesktopVpnManager private constructor(
      * per attempt, so it cannot be worked out again.
      */
     private var windowsTunInterface: String? = null
+    private var windowsTunCacheFile: Path? = null
+    private var desktopOlcRtcBond: DesktopOlcRtcBond? = null
     private val windowsTunCore = org.olcbox.app.net.DesktopSingBoxController(onOutput = ::onWindowsTunOutput)
 
     /** The tun core said the system's filtering engine refused `strict_route`; see [startWindowsTun]. */
@@ -432,6 +438,7 @@ class DesktopVpnManager private constructor(
                         _status.value is VpnStatus.Connecting ||
                         _status.value is VpnStatus.Reconnecting ||
                         process != null ||
+                        desktopOlcRtcBond != null ||
                         tunProcess != null
 
                 if (shouldRestart) {
@@ -813,7 +820,7 @@ class DesktopVpnManager private constructor(
             // (unchanged); vless/hy2/xhttp start a sing-box/Xray core on the core
             // SOCKS port. The tun/PAC then targets whichever port is active.
             connectedLocation = location.normalized()
-            val effectiveSocksPort =
+            var effectiveSocksPort =
                 if (isOlcrtc) {
                     socksSettings.port
                 } else {
@@ -866,29 +873,44 @@ class DesktopVpnManager private constructor(
              */
             suspend fun startFirstLine(tunResolvers: List<String>?) {
                 if (isOlcrtc) {
-                    process = startOlcRtcProcessWithFallback(
-                        location = location,
-                        socksSettings = socksSettings,
-                        ready = ready,
-                        startupFailure = startupFailure,
-                        logOutput = true,
-                        privileged = desktopMode == DesktopMode.LinuxTun,
-                        byHelper = engineByHelper,
-                        directRulesFile = engineRules,
-                        dtlsProfile = dtlsProfile,
-                        dnsServer = tunResolvers?.let(DesktopDnsResolver::engineServers) ?: DesktopDnsResolver.current()
-                    )
-                    val olcRtcProcess = process ?: error("olcRTC process is missing")
-                    waitForOlcRtcReady(
-                        process = olcRtcProcess,
-                        ready = ready,
-                        startupFailure = startupFailure,
-                        socksPort = socksSettings.port,
-                        requestGeneration = requestGeneration
-                    )
-                    if (coreRouting is Routing.Rules) {
-                        frontPort = startOlcRtcFront(socksSettings, coreRouting, verboseLogs)
-                        coresAlive = singBoxCore::isRunning
+                    if (isBondedWindows(location, desktopMode)) {
+                        frontPort = startDesktopBond(
+                            location = location,
+                            socksSettings = socksSettings,
+                            dtlsProfile = dtlsProfile,
+                            dnsServer = tunResolvers?.let(DesktopDnsResolver::engineServers)
+                                ?: DesktopDnsResolver.current(),
+                            verboseLogs = verboseLogs,
+                        )
+                        effectiveSocksPort = frontPort!!
+                        activeCorePort = frontPort
+                        coresAlive = ::isDesktopBondAlive
+                    } else {
+                        process = startOlcRtcProcessWithFallback(
+                            location = location,
+                            socksSettings = socksSettings,
+                            ready = ready,
+                            startupFailure = startupFailure,
+                            logOutput = true,
+                            privileged = desktopMode == DesktopMode.LinuxTun,
+                            byHelper = engineByHelper,
+                            directRulesFile = engineRules,
+                            dtlsProfile = dtlsProfile,
+                            dnsServer = tunResolvers?.let(DesktopDnsResolver::engineServers)
+                                ?: DesktopDnsResolver.current()
+                        )
+                        val olcRtcProcess = process ?: error("olcRTC process is missing")
+                        waitForOlcRtcReady(
+                            process = olcRtcProcess,
+                            ready = ready,
+                            startupFailure = startupFailure,
+                            socksPort = socksSettings.port,
+                            requestGeneration = requestGeneration
+                        )
+                        if (coreRouting is Routing.Rules) {
+                            frontPort = startOlcRtcFront(socksSettings, coreRouting, verboseLogs)
+                            coresAlive = singBoxCore::isRunning
+                        }
                     }
                 } else {
                     coresAlive = startDesktopCore(
@@ -1051,7 +1073,7 @@ class DesktopVpnManager private constructor(
                     port = tunVerifyPort,
                     requestGeneration = requestGeneration,
                     lineAlive = {
-                        if (isOlcrtc) process?.isAlive == true else singBoxCore.isRunning() || xrayCore.isRunning()
+                        if (isOlcrtc) isOlcRtcTransportAlive() else singBoxCore.isRunning() || xrayCore.isRunning()
                     }
                 )
                 else -> org.olcbox.app.net.TunnelVerifier.verify(
@@ -1241,6 +1263,8 @@ class DesktopVpnManager private constructor(
             val verifyPassword = UUID.randomUUID().toString()
             val trafficApi = newTrafficApi()
             val interfaceName = windowsTunInterfaceName(windowsTunSessionId, requestGeneration, attempt)
+            val cachePath = windowsTunCachePath(windowsTunSessionId, requestGeneration, attempt)
+            windowsTunCacheFile = cachePath
             windowsTunCore.start(
                 org.olcbox.app.net.SingBoxConfig.buildDesktopTun(
                     corePort = socksPort,
@@ -1257,7 +1281,7 @@ class DesktopVpnManager private constructor(
                     routing = Routing.Global,
                     bindInterface = physicalInterface,
                     bypassProcessPaths = bypassPaths,
-                    cacheFilePath = DesktopPaths.appDataDir().resolve("windows-tun-cache.db").toString(),
+                    cacheFilePath = cachePath.toString(),
                     interfaceName = interfaceName,
                     strictRoute = strictRoute,
                     trafficApi = trafficApi
@@ -1278,6 +1302,8 @@ class DesktopVpnManager private constructor(
                 break
             }
             windowsTunCore.stopNow()
+            runCatching { Files.deleteIfExists(cachePath) }
+            windowsTunCacheFile = null
             // It answered names for as long as it stood, carrying or not.
             windowsTunController.forgetTunnelAnswers()
             if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
@@ -1638,6 +1664,128 @@ class DesktopVpnManager private constructor(
      * system's list is the tun's once it is up; under [besideTun] they are
      * read again every time.
      */
+    private suspend fun startDesktopBond(
+        location: LocationConfig,
+        socksSettings: DesktopSocksProxySettings,
+        dtlsProfile: String,
+        dnsServer: String,
+        verboseLogs: Boolean,
+    ): Int {
+        val config = location.normalized()
+        val rooms = config.bondedRooms()
+        require(rooms.size == 4) { "a bonded desktop location requires four rooms" }
+        stopDesktopBond()
+        stopDesktopCores()
+        val started = mutableListOf<DesktopOlcRtcBond.Room>()
+        try {
+            val binary = DesktopNativeAssets.resolveOlcRtcBinary()
+            rooms.forEachIndexed { index, room ->
+                val port = allocateBondPort()
+                val command = OlcRtcCommand(
+                    binary = binary,
+                    location = config.copy(id = room),
+                    socksHost = socksSettings.host,
+                    socksPort = port,
+                    socksUser = socksSettings.username,
+                    socksPass = socksSettings.password,
+                    dnsServer = dnsServer,
+                    directRulesFile = null,
+                    dtlsProfile = dtlsProfile,
+                    udpEnabled = false,
+                )
+                val configPath = Files.createTempFile(
+                    olcRtcConfigDir().also { Files.createDirectories(it) },
+                    "${OLCRTC_CONFIG_PREFIX}bond-${index + 1}-",
+                    ".yaml",
+                )
+                Files.writeString(configPath, command.yaml(), StandardCharsets.UTF_8)
+                val builder = ProcessBuilder(command.args(configPath)).redirectErrorStream(true)
+                builder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
+                builder.environment()["no_proxy"] = "127.0.0.1,localhost"
+                val process = builder.start()
+                started += DesktopOlcRtcBond.Room(process, configPath, port)
+                scope.launch {
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line -> addLog("rtc: $line") }
+                    }
+                }
+                if (!waitForCoreSocks(port) { process.isAlive }) {
+                    error("bonded olcRTC room ${index + 1} SOCKS not ready on $port")
+                }
+            }
+            val bond = DesktopOlcRtcBond(started)
+            desktopOlcRtcBond = bond
+
+            val spec = LinkParser.parse(config.bondVlessLink!!) as? OutboundSpec.Vless
+                ?: error("bond carrier is not VLESS")
+            val xrayPort = allocateBondPort()
+            val frontPort = allocateCorePort()
+            val login = SocksLogin.of(socksSettings.username, socksSettings.password)
+            xrayCore.start(
+                XrayConfig.buildVlessBond(
+                    spec,
+                    roomPorts = bond.ports(),
+                    roomUsername = socksSettings.username,
+                    roomPassword = socksSettings.password,
+                    socksPort = xrayPort,
+                    verboseLogs = verboseLogs,
+                    login = login,
+                )
+            )
+            if (!waitForCoreSocks(xrayPort) { xrayCore.isRunning() }) {
+                error("bonded Xray SOCKS not ready on $xrayPort")
+            }
+            singBoxCore.start(
+                SingBoxConfig.buildSocksChain(
+                    xrayPort,
+                    socksPort = frontPort,
+                    username = login?.username.orEmpty(),
+                    password = login?.password.orEmpty(),
+                    routing = Routing.Global,
+                    verboseLogs = verboseLogs,
+                    login = login,
+                )
+            )
+            if (!waitForCoreSocks(frontPort) { singBoxCore.isRunning() && xrayCore.isRunning() }) {
+                error("bonded sing-box front not ready on $frontPort")
+            }
+            activeCorePort = frontPort
+            addLog("Desktop Mamba x4 ready; sing-box front on 127.0.0.1:$frontPort")
+            return frontPort
+        } catch (error: Throwable) {
+            if (desktopOlcRtcBond == null) {
+                started.forEach { room ->
+                    stopProcess(room.process)
+                    runCatching { Files.deleteIfExists(room.configPath) }
+                }
+            }
+            stopDesktopCores()
+            stopDesktopBond()
+            throw error
+        }
+    }
+
+    private fun allocateBondPort(): Int = java.net.ServerSocket().use { socket ->
+        socket.reuseAddress = false
+        socket.bind(java.net.InetSocketAddress("127.0.0.1", 0))
+        socket.localPort
+    }
+
+    private fun isDesktopBondAlive(): Boolean =
+        desktopOlcRtcBond?.isRunning() == true && singBoxCore.isRunning() && xrayCore.isRunning()
+
+    private fun isOlcRtcTransportAlive(): Boolean =
+        desktopOlcRtcBond?.isRunning() ?: (process?.isAlive == true)
+
+    private fun stopDesktopBond() {
+        val bond = desktopOlcRtcBond
+        desktopOlcRtcBond = null
+        if (bond != null) {
+            runCatching { bond.stop() }.onFailure { addLog("Desktop olcRTC bond stop failed: ${it.message}") }
+            bond.deleteConfigs()
+        }
+    }
+
     private suspend fun startDesktopCore(
         location: LocationConfig,
         port: Int,
@@ -2010,6 +2158,7 @@ class DesktopVpnManager private constructor(
         // machine routed through a tunnel nothing is feeding.
         if (_status.value is VpnStatus.Disconnected &&
             process == null &&
+            desktopOlcRtcBond == null &&
             tunProcess == null &&
             !macTunActive
         ) {
@@ -2052,6 +2201,8 @@ class DesktopVpnManager private constructor(
                 val tunWasUp = tunProcess != null || windowsTunCore.isRunning()
                 runCatching {
                     windowsTunCore.stopNow()
+                    windowsTunCacheFile?.let { Files.deleteIfExists(it) }
+                    windowsTunCacheFile = null
                     windowsTunExit = null
                     windowsTunVerifyProxy = null
                     windowsTunInterface = null
@@ -2105,6 +2256,7 @@ class DesktopVpnManager private constructor(
         pacServer.stop()
 
         stopDesktopCores()
+        stopDesktopBond()
         stopProcess(process)
         process = null
         deleteOlcRtcConfig()
@@ -2621,6 +2773,12 @@ class DesktopVpnManager private constructor(
             // No location to change to. The full restart ends in the error it
             // always has.
             if (active == null || location == null || !location.isComplete()) return false
+            if (isBondedWindows(current.location, current.desktopMode) ||
+                isBondedWindows(location, current.desktopMode)
+            ) {
+                addLog("A bonded location change restarts the whole transport")
+                return false
+            }
             val routingSettings = locationsRepository.getRoutingSettings()
             val change = LineSupervision.changeOfLine(
                 session = session.built,
@@ -3057,7 +3215,7 @@ class DesktopVpnManager private constructor(
      */
     private suspend fun startDeadProcesses(line: SessionLine, requestGeneration: Long): Boolean {
         try {
-            if (line.isOlcrtc && process?.isAlive != true) {
+            if (line.isOlcrtc && !isOlcRtcTransportAlive()) {
                 requireNoListener(line.socksSettings.port)
                 startLineEngine(line, requestGeneration)
                 if (requestGeneration != generation) return false
@@ -3104,7 +3262,7 @@ class DesktopVpnManager private constructor(
 
     /** Whether everything of the line runs: the engine of a room, and the cores it was started with. */
     private fun SessionLine.allRunning(): Boolean =
-        (!isOlcrtc || process?.isAlive == true) && coresAlive?.invoke() != false
+        (!isOlcrtc || isOlcRtcTransportAlive()) && coresAlive?.invoke() != false
 
     /** The outage of the line one run of [launchLineAttempts] is trying; see [SessionFailover]. */
     private class LineOutage {
@@ -3327,7 +3485,7 @@ class DesktopVpnManager private constructor(
             if (requestGeneration != generation || sessionLine !== line) return Look.CutShort
             when {
                 !line.isOlcrtc -> FailedEngine.None
-                process?.isAlive == true -> FailedEngine.Running
+                isOlcRtcTransportAlive() -> FailedEngine.Running
                 else -> FailedEngine.Down
             }
         }
@@ -4007,6 +4165,18 @@ internal fun windowsTunInterfaceName(
     requestGeneration: Long,
     attempt: Int
 ): String = "Ghostlane-$sessionId-${requestGeneration.toString(16)}-${attempt + 1}"
+
+internal fun isBondedWindows(location: LocationConfig, mode: DesktopMode): Boolean =
+    mode == DesktopMode.WindowsTun && location.kind == LocationKind.Olcrtc &&
+        !location.bondVlessLink.isNullOrBlank()
+
+internal fun windowsTunCachePath(
+    sessionId: String,
+    requestGeneration: Long,
+    attempt: Int,
+): Path = DesktopPaths.appDataDir().resolve(
+    "windows-tun-cache-$sessionId-${requestGeneration.toString(16)}-${attempt + 1}.db"
+)
 
 /**
  * How this desktop puts traffic through the tunnel.
