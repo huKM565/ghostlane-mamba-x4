@@ -73,7 +73,7 @@ android {
 
         // org.proofkit.app, as on iOS: the olcbox id collided with every other
         // app built from olcbox on the same phone. The Kotlin namespace stays.
-        applicationId = "org.proofkit.app"
+        applicationId = "ru.hukm.ilyukhaline"
         versionCode = olcboxVersionCode.get()
         versionName = olcboxVersion.get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

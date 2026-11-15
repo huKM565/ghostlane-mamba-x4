@@ -53,3 +53,7 @@ __pycache__/
 *.log
 *.bak-*
 .superpowers/
+
+# Prebuilt native libraries
+androidApp/jniLibs/*/*.so
+
