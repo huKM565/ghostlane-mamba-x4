@@ -27,10 +27,10 @@ class DesktopBrandingTest {
         try {
             System.setProperty("os.name", "Windows 11")
             System.setProperty("user.home", home.toString())
-            assertEquals(
-                home.resolve("AppData").resolve("Roaming").resolve("IlyukhaLine"),
-                DesktopPaths.appDataDir(),
-            )
+            val root = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
+                ?.let { java.nio.file.Path.of(it) }
+                ?: home.resolve("AppData").resolve("Roaming")
+            assertEquals(root.resolve("IlyukhaLine"), DesktopPaths.appDataDir())
         } finally {
             System.setProperty("os.name", oldOs)
             System.setProperty("user.home", oldHome)

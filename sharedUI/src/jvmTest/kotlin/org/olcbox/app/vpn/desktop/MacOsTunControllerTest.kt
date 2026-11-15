@@ -564,7 +564,8 @@ class MacOsTunControllerTest {
                 val line = runBlocking { controller.startLine(Path.of("/Users/a/bin/olcrtc-darwin-arm64"), listOf("/tmp/c.yaml"), said) }
                 val asked = daemon.request(0)
                 assertEquals("\"line\"", asked["verb"].toString())
-                assertEquals("\"/Users/a/bin/olcrtc-darwin-arm64\"", asked["program"].toString())
+                val program = Path.of("/Users/a/bin/olcrtc-darwin-arm64").toString()
+                assertEquals("\"${program.replace("\\", "\\\\")}\"", asked["program"].toString())
                 assertEquals("[\"/tmp/c.yaml\"]", asked["arguments"].toString())
                 assertEquals("\"$said\"", asked["output"].toString())
                 assertEquals(child.pid(), line.pid())

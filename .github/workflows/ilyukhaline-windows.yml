@@ -13,6 +13,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      - name: Keep source and resources byte-for-byte
+        run: git config --global core.autocrlf false
+
       - name: Checkout IlyukhaLine
         uses: actions/checkout@v7
         with:

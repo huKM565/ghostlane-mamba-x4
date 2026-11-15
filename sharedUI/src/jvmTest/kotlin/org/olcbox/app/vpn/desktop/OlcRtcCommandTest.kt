@@ -69,6 +69,7 @@ class OlcRtcCommandTest {
         val rules = Path.of("/home/a user/it's here/olcrtc-direct-1.txt")
         val with = command(LocationConfig.PROVIDER_TELEMOST, LocationConfig.TRANSPORT_DATACHANNEL, rules).yaml()
         // By absolute path, single-quoted with the quote doubled: YAML's own escape.
-        assertContains(with, "route:\n  direct_file: '/home/a user/it''s here/olcrtc-direct-1.txt'\n")
+        val expected = rules.toAbsolutePath().toString().replace("'", "''")
+        assertContains(with, "route:\n  direct_file: '$expected'\n")
     }
 }
