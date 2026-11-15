@@ -5,10 +5,10 @@ import androidx.compose.ui.graphics.Color
 
 /** ProofKit tokens with no Material 3 slot (site: --accent/--accent-2/--success/…). */
 data class PkPalette(
-    val accent: Color = Color(0xFFB5F23D),
-    val accentSoft: Color = Color(0x1AB5F23D),
-    val accent2: Color = Color(0xFFFFB547),
-    val accent2Soft: Color = Color(0x1AFFB547),
+    val accent: Color = Color(0xFF22D3EE),
+    val accentSoft: Color = Color(0x1A22D3EE),
+    val accent2: Color = Color(0xFFFF8A65),
+    val accent2Soft: Color = Color(0x1AFF8A65),
     val success: Color = Color(0xFF4ADE80),
     val successSoft: Color = Color(0x1F4ADE80),
     val warning: Color = Color(0xFFF59E0B),
@@ -25,7 +25,7 @@ data class PkPalette(
     /** A seat somebody else holds. Never lime — lime is reserved for yours. */
     val seatOther: Color = Color(0xFF4A5379),
     /** Indigo at text weight: MEASURE and anything else that reads as a link. */
-    val link: Color = Color(0xFF8190FF),
+    val link: Color = Color(0xFF22D3EE),
     /**
      * Darker than `outlineVariant`, for rules that separate bands of one screen
      * rather than outlining a component. A card border at this weight disappears.
