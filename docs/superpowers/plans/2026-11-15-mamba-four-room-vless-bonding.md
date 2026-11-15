@@ -4,9 +4,9 @@
 
 **Goal:** Build Ghostlane 1.0.472 for Android with one subscription profile that carries VLESS with `xudp` through four simultaneous Mamba rooms while leaving VK Calls as a separate working profile.
 
-**Architecture:** Add an explicit `##bond-vless` subscription marker to the existing olcRTC location model. For marked locations, Android starts four independent gomobile runtimes and a sing-box core whose four VLESS outbounds detour through those runtimes and join one round-robin `loadbalance` outbound. The existing Android TUN and bridge connect only to sing-box; unmarked olcRTC and VLESS locations keep their current paths.
+**Architecture:** Add an explicit `##bond-vless` subscription marker to the existing olcRTC location model. For marked locations, Android starts four independent gomobile runtimes and Xray with four VLESS outbounds chained through those runtimes and joined by a `roundRobin` balancer. The existing sing-box core remains in front for routing and connects to Xray over loopback SOCKS. Official sing-box 1.13.14 has no `loadbalance` outbound; its proposed PR #4321 was closed unmerged. The existing Android TUN and bridge connect only to sing-box; unmarked olcRTC and VLESS locations keep their current paths.
 
-**Tech Stack:** Kotlin Multiplatform, kotlinx.serialization, Android `VpnService`, gomobile `mobile.Runtime`, sing-box 1.13.14, VLESS `xudp`, Gradle, JUnit/kotlin.test.
+**Tech Stack:** Kotlin Multiplatform, kotlinx.serialization, Android `VpnService`, gomobile `mobile.Runtime`, sing-box 1.13.14, Xray 26.7.11, VLESS Mux/XUDP, Gradle, JUnit/kotlin.test.
 
 **Spec:** `docs/superpowers/specs/2026-11-15-mamba-four-room-vless-bonding-design.md`
 
@@ -14,8 +14,8 @@
 
 - Base source is Ghostlane 1.0.472; APK version is `1.0.472`, version code `472`.
 - A bonded profile has exactly four unique rooms and four independent `mobile.Runtime` instances.
-- Every VLESS outbound uses `packet_encoding=xudp` and a room-specific `detour`.
-- The final sing-box outbound is `loadbalance` with strategy `round_robin` and tag `out`.
+- Every VLESS outbound uses Xray Mux/XUDP and a room-specific `streamSettings.sockopt.dialerProxy`.
+- The Xray balancer `bond` uses strategy `roundRobin`; sing-box remains the unmodified routing front.
 - Rooms, olcRTC keys and VLESS parameters come from the subscription; no real credentials enter source, tests or documentation.
 - `##rooms` remains failover unless `##bond-vless` is present.
 - VK Calls remains a separate unmodified single-runtime profile.
@@ -88,15 +88,15 @@ Run the Step 3 command.
 
 Expected: all new tests and all existing `LocationsRepositoryImplTest` cases pass.
 
-### Task 2: Generate the Four-Path sing-box Configuration
+### Task 2: Generate the Four-Path Xray Configuration
 
 **Files:**
-- Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/net/SingBoxConfig.kt:66-79,180-194,1044-1075`
-- Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/net/SingBoxConfigTest.kt`
-- Test: `sharedUI/src/jvmTest/kotlin/org/olcbox/app/net/SingBoxConfigDumpTest.kt`
+- Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/net/XrayConfig.kt`
+- Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/net/XrayConfigBondTest.kt`
+- Test: `sharedUI/src/jvmTest/kotlin/org/olcbox/app/net/XrayConfigDumpTest.kt`
 
 **Interfaces:**
-- Consumes: `OutboundSpec.Vless`, `Routing`, `SocksLogin`, existing `render`, and existing VLESS serialization.
+- Consumes: `OutboundSpec.Vless`, `SocksLogin` and the pinned Xray 26.7.11 schema.
 - Produces:
 
 ```kotlin
@@ -105,8 +105,7 @@ fun buildVlessBond(
     roomPorts: List<Int>,
     roomUsername: String,
     roomPassword: String,
-    socksPort: Int = SINGBOX_SOCKS_PORT,
-    routing: Routing = Routing.Global,
+    socksPort: Int = XRAY_SOCKS_PORT,
     verboseLogs: Boolean = false,
     login: SocksLogin? = null,
 ): String
@@ -116,40 +115,39 @@ fun buildVlessBond(
 
 Build with ports `[21081, 21082, 21083, 21084]`, room credentials `room-user`/`room-pass`, and inbound credentials `in-user`/`in-pass`. Parse the resulting JSON and assert:
 
-- `outbounds[0]` is tag `out`, type `loadbalance`, strategy `round_robin`, with VLESS tags 1-4 in order.
-- Four VLESS objects reuse the input server, port, UUID and `packet_encoding=xudp`; VLESS N has `detour=socks-room-N`.
+- The routing balancer `bond` uses `roundRobin` and selects VLESS tags 1-4 in order; the inbound rule points to it.
+- Four VLESS objects reuse the input server, port and UUID; VLESS N has `streamSettings.sockopt.dialerProxy=socks-room-N` and Mux/XUDP enabled with TCP muxing disabled and UDP/443 allowed.
 - Four SOCKS objects point to `127.0.0.1:2108N`, contain the room credentials, and have unique tags.
-- The SOCKS inbound uses the requested port and inbound credentials.
-- Existing routing still refers to tag `out`.
+- The SOCKS inbound uses the requested port, UDP and inbound credentials.
 - Fewer than four, more than four, or duplicate ports throw `IllegalArgumentException`.
 
 - [ ] **Step 2: Add a real-config dump test**
 
-Add `dumpVlessMambaX4`, parsing a plain VLESS link at `127.0.0.1:10000`, calling `buildVlessBond` with the four test ports, and writing `build/singbox-configs/vless-mamba-x4.json` through the existing `dump` helper.
+Add `dumpVlessMambaX4`, parsing a plain VLESS link at `127.0.0.1:10000`, calling `buildVlessBond` with the four test ports, and writing `build/xray-configs/vless-mamba-x4.json` through the existing `dump` helper.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run:
 
 ```bash
-./gradlew :sharedUI:jvmTest --tests "org.olcbox.app.net.SingBoxConfigTest" --tests "org.olcbox.app.net.SingBoxConfigDumpTest"
+./gradlew :sharedUI:jvmTest --tests "org.olcbox.app.net.XrayConfigBondTest" --tests "org.olcbox.app.net.XrayConfigDumpTest"
 ```
 
 Expected: compilation failure because `buildVlessBond` is absent.
 
 - [ ] **Step 4: Implement the builder**
 
-Reuse `render` for inbound, DNS, routing and logs. Reuse the existing VLESS object builder, replacing its tag and adding `detour`; add tagged SOCKS helpers that include room credentials only when nonblank. Insert `loadbalance` as tag `out` first, then four VLESS and four SOCKS outbounds. Validate exactly four distinct ports before rendering.
+Create the Xray SOCKS inbound, four chained VLESS outbounds, four tagged SOCKS room outbounds and the `roundRobin` routing balancer. Validate exactly four distinct ports. Keep sing-box unchanged: Task 4 puts its existing SOCKS-chain builder in front when routing is needed.
 
 - [ ] **Step 5: Run unit tests and validate the real schema**
 
 Run the Step 3 command, then:
 
 ```bash
-SINGBOX_BIN=/path/to/sing-box-1.13.14 scripts/check-singbox-configs.sh
+XRAY_BIN=/path/to/xray-26.7.11 bash scripts/check-xray-configs.sh
 ```
 
-Expected: tests pass and `vless-mamba-x4.json` plus all pre-existing dumped configurations pass `sing-box check`.
+Expected: tests pass and `vless-mamba-x4.json` plus all pre-existing dumped configurations pass `xray run -test`.
 
 ### Task 3: Implement a Testable Four-Runtime Lifecycle
 
@@ -221,9 +219,9 @@ Expected: all lifecycle tests pass.
 - Test: `sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/OlcboxVpnServiceNativeRunTest.kt` (extend only if its existing source-input checks cover the touched lifecycle)
 
 **Interfaces:**
-- Consumes: `LocationConfig.bondVlessLink`, `LocationConfig.bondedRooms()`, `SingBoxConfig.buildVlessBond`, `OlcRtcBond` and `OlcRtcBondRuntime` from Tasks 1-3.
+- Consumes: `LocationConfig.bondVlessLink`, `LocationConfig.bondedRooms()`, `XrayConfig.buildVlessBond`, `SingBoxConfig.buildSocksChain`, `OlcRtcBond` and `OlcRtcBondRuntime` from Tasks 1-3.
 - Produces: `GomobileOlcRtcBondRuntime(runtime: OlcrtcRuntime) : OlcRtcBondRuntime`.
-- Produces: `startCore(..., bondRoomPorts: List<Int>? = null)`; when non-null it reads `location.bondVlessLink` and emits the bonded config.
+- Produces: `startCore(..., bondRoomPorts: List<Int>? = null)`; when non-null it starts Xray with the bonded config and sing-box's existing SOCKS-chain front with the selected routing.
 - Produces: service state for the active `OlcRtcBond` and its ordered room ports.
 
 - [ ] **Step 1: Establish the baseline**
@@ -242,23 +240,23 @@ Delegate the five `OlcRtcBondRuntime` methods to the generated `OlcrtcRuntime` m
 
 Parameterize `installMobileCallbacks` and `configureMobileTransport` by the runtime being configured while keeping the current single-runtime calls valid. Every pool runtime receives socket protection, upstream DNS, provider, transport, device ID, key, room, port and the same SOCKS credentials.
 
-For bonded carriers, set direct rules to empty and native runtime UDP to false: UDP belongs to VLESS `xudp`, not the olcRTC datagram lane.
+For bonded carriers, set direct rules to empty and native runtime UDP to false: UDP belongs to VLESS Mux/XUDP, not the olcRTC datagram lane.
 
-- [ ] **Step 3: Implement bonded startup and sing-box startup**
+- [ ] **Step 3: Implement bonded startup and core startup**
 
 In `startTransport`, select the bonded branch only for an olcRTC location with nonblank `bondVlessLink`.
 
-Allocate four distinct free loopback ports. Create four fresh runtimes via `Mobile.new_()`, configure them with the ordered `bondedRooms()`, start them through `OlcRtcBond`, then call `startCore(..., bondRoomPorts=ports)`. Set `activeCorePort` to the sing-box inbound so the existing bridge and verifier use VLESS, not an individual room.
+Allocate four distinct free loopback ports. Create four fresh runtimes via `Mobile.new_()`, configure them with the ordered `bondedRooms()`, start them through `OlcRtcBond`, then call `startCore(..., bondRoomPorts=ports)`. Start Xray with the bonded config and sing-box in front with the existing SOCKS-chain builder. Set `activeCorePort` to the sing-box inbound so the existing bridge and verifier use VLESS, not an individual room.
 
-If any runtime or core fails, stop the whole pool and core and return failure through the existing error/retry path. Do not start the ordinary single `olcrtc` runtime in this branch.
+If any runtime or core fails, stop the whole pool and both cores and return failure through the existing error/retry path. Do not start the ordinary single `olcrtc` runtime in this branch.
 
 - [ ] **Step 4: Implement complete cleanup and health/DNS handling**
 
 Update `stopMobile`, `stopMobileAndWait`, `isActiveTransportRunning` and `updateUnderlyingNetwork` so they:
 
-- stop both possible runtime shapes and the core, attempting all cleanup;
-- wait for the core and all known room ports to be released;
-- report a bonded connection as running only when all four runtimes and sing-box are alive;
+- stop both possible runtime shapes and both cores, attempting all cleanup;
+- wait for the cores and all known room ports to be released;
+- report a bonded connection as running only when all four runtimes, Xray and sing-box are alive;
 - apply new upstream DNS to every active runtime;
 - preserve the existing Jitsi stop-settle timestamp when a bonded Jitsi pool stops.
 

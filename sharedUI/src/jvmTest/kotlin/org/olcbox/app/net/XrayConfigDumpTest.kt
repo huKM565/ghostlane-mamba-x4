@@ -49,6 +49,23 @@ class XrayConfigDumpTest {
         )
     }
 
+    @Test fun dumpVlessMambaX4() {
+        val spec = LinkParser.parse(
+            "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000" +
+                "?security=none&encryption=none#Mamba-x4"
+        ) as OutboundSpec.Vless
+        dump(
+            "vless-mamba-x4",
+            XrayConfig.buildVlessBond(
+                spec,
+                roomPorts = listOf(21081, 21082, 21083, 21084),
+                roomUsername = "room-user",
+                roomPassword = "room-pass",
+            )
+        )
+        assertTrue(File(outDir, "vless-mamba-x4.json").exists())
+    }
+
     private val link = "vless://22222222-2222-2222-2222-222222222222@127.0.0.1:443" +
         "?type=xhttp&security=reality&encryption=none&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" +
         "&sid=cd34&fp=chrome&sni=www.microsoft.com&path=%2Fdownload&host=www.microsoft.com&mode=packet-up#FI-xhttp"

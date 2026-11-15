@@ -60,6 +60,113 @@ object XrayConfig {
         "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
     )
 
+    fun buildVlessBond(
+        spec: OutboundSpec.Vless,
+        roomPorts: List<Int>,
+        roomUsername: String,
+        roomPassword: String,
+        socksPort: Int = XRAY_SOCKS_PORT,
+        verboseLogs: Boolean = false,
+        login: SocksLogin? = null,
+    ): String {
+        require(roomPorts.size == 4 && roomPorts.toSet().size == 4) {
+            "a VLESS bond requires exactly four distinct room ports"
+        }
+        require(spec.plain && spec.transport == TransportSpec.Tcp) {
+            "a VLESS room bond requires a plain TCP VLESS endpoint"
+        }
+        return buildJsonObject {
+            putJsonObject("log") { put("loglevel", if (verboseLogs) "debug" else "warning") }
+            putJsonArray("inbounds") {
+                addJsonObject {
+                    put("tag", "in"); put("listen", "127.0.0.1"); put("port", socksPort)
+                    put("protocol", "socks")
+                    putJsonObject("settings") {
+                        if (login != null) {
+                            put("auth", "password")
+                            putJsonArray("accounts") {
+                                addJsonObject {
+                                    put("user", login.username)
+                                    put("pass", login.password)
+                                }
+                            }
+                        }
+                        put("udp", true)
+                    }
+                }
+            }
+            putJsonArray("outbounds") {
+                roomPorts.forEachIndexed { index, _ ->
+                    val number = index + 1
+                    addJsonObject {
+                        put("tag", "vless-room-$number"); put("protocol", "vless")
+                        putJsonObject("settings") {
+                            putJsonArray("vnext") {
+                                addJsonObject {
+                                    put("address", spec.host); put("port", spec.port)
+                                    putJsonArray("users") {
+                                        addJsonObject {
+                                            put("id", spec.uuid); put("encryption", "none")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        putJsonObject("streamSettings") {
+                            put("network", "tcp"); put("security", "none")
+                            putJsonObject("sockopt") { put("dialerProxy", "socks-room-$number") }
+                        }
+                        putJsonObject("mux") {
+                            put("enabled", true)
+                            put("concurrency", -1)
+                            put("xudpConcurrency", 16)
+                            put("xudpProxyUDP443", "allow")
+                        }
+                    }
+                }
+                roomPorts.forEachIndexed { index, port ->
+                    addJsonObject {
+                        put("tag", "socks-room-${index + 1}"); put("protocol", "socks")
+                        putJsonObject("settings") {
+                            putJsonArray("servers") {
+                                addJsonObject {
+                                    put("address", "127.0.0.1"); put("port", port)
+                                    if (roomUsername.isNotBlank() || roomPassword.isNotBlank()) {
+                                        putJsonArray("users") {
+                                            addJsonObject {
+                                                put("user", roomUsername)
+                                                put("pass", roomPassword)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            putJsonObject("routing") {
+                put("domainStrategy", "AsIs")
+                putJsonArray("rules") {
+                    addJsonObject {
+                        put("type", "field")
+                        putJsonArray("inboundTag") { add("in") }
+                        put("balancerTag", "bond")
+                    }
+                }
+                putJsonArray("balancers") {
+                    addJsonObject {
+                        put("tag", "bond")
+                        putJsonArray("selector") {
+                            roomPorts.indices.forEach { add("vless-room-${it + 1}") }
+                        }
+                        putJsonObject("strategy") { put("type", "roundRobin") }
+                    }
+                }
+            }
+        }.toString()
+    }
+
     /**
      * Build an Xray config for a vless+xhttp+reality location. Requires the spec's
      * transport to be [TransportSpec.Xhttp] (Xray's role here is xhttp only).
