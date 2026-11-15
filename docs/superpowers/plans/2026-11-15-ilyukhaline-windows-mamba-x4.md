@@ -28,6 +28,7 @@
 - A switch involving a bonded profile must not reuse a single-room endpoint; Tasks 3 and 4 pin full restart and endpoint replacement.
 - A bonded health check must fail when any one room dies; Task 3 pins all-four health.
 - A new Windows install must not inherit Ghostlane's cache lock or subscriptions; Task 1 pins the separate data directory and upgrade identity.
+- A retry or stale sing-box must not hold the next attempt's cache; Task 4 pins a unique per-attempt cache path and its cleanup.
 - Native olcRTC UDP or direct rules must not bypass VLESS; Task 3 pins both false/absent in every generated room config.
 
 ---
@@ -132,15 +133,15 @@ Run the focused tests and full JVM suite, then `git commit -m "feat: supervise f
 
 - [ ] **Step 1: Write failing integration tests**
 
-Using the real source-input test pattern or an extracted planner, assert the bonded branch exists only for Windows TUN plus a bond marker; four commands use distinct ports; Xray starts before sing-box; the TUN endpoint is the sing-box front with matching credentials; health requires every room and both cores; stop clears the pool; switches involving a bond take the full-restart path.
+Using the real source-input test pattern or an extracted planner, assert the bonded branch exists only for Windows TUN plus a bond marker; four commands use distinct ports; Xray starts before sing-box; the TUN endpoint is the sing-box front with matching credentials; health requires every room and both cores; stop clears the pool; switches involving a bond take the full-restart path; each TUN attempt uses a unique cache path and cleanup removes it.
 
 - [ ] **Step 2: Verify RED**
 
-Run `DesktopBondIntegrationTest`. Expected: the Windows bonded path is absent.
+Run `DesktopBondIntegrationTest`. Expected: the Windows bonded path and per-attempt cache handling are absent.
 
 - [ ] **Step 3: Implement startup, health, cleanup and full restart**
 
-Allocate four ports, start/wait/log each process, build the pool, then start Xray and the sing-box front. Point Windows TUN at the front, not a room. Keep `process` null for a pool and make every active-room health check use the pool. Add the bond to disconnected cleanup guards and stop it before deleting configs. Ordinary branches stay byte-for-byte in behavior.
+Allocate four ports, start/wait/log each process, build the pool, then start Xray and the sing-box front. Point Windows TUN at the front, not a room. Keep `process` null for a pool and make every active-room health check use the pool. Add the bond to disconnected cleanup guards and stop it before deleting configs. Use `windows-tun-cache-<session>-<attempt>.db` for every TUN attempt and delete it after that attempt stops. Ordinary branches keep their existing transport behavior.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
