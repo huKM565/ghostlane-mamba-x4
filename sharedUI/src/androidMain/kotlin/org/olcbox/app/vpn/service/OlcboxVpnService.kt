@@ -78,6 +78,7 @@ import org.olcbox.app.net.AndroidXrayController
 import org.olcbox.app.net.DirectDns
 import org.olcbox.app.net.LinkParser
 import org.olcbox.app.net.LocationKind
+import org.olcbox.app.net.OlcRtcBond
 import org.olcbox.app.net.OlcrtcDirectRules
 import org.olcbox.app.net.OlcrtcDtls
 import org.olcbox.app.net.OutboundSpec
@@ -255,9 +256,11 @@ class OlcboxVpnService : VpnService() {
     private var routingSettings = RoutingSettings()
     private var verboseDebugLogs = false
 
-    // One engine per service. Created by the Go constructor: the generated
+    // Ordinary profiles use one engine. Created by the Go constructor: the generated
     // no-argument Runtime() allocates an empty struct that cannot start.
     private val olcrtc: OlcrtcRuntime by lazy { Mobile.new_() }
+    private var olcRtcBond: OlcRtcBond? = null
+    private var bondRoomPorts: List<Int> = emptyList()
 
     private data class StartOptions(
         val connectionMode: AndroidConnectionMode,
@@ -452,8 +455,8 @@ class OlcboxVpnService : VpnService() {
         super.onRevoke()
     }
 
-    private fun installMobileCallbacks() {
-        olcrtc.setProtector(object : SocketProtector {
+    private fun installMobileCallbacks(runtime: OlcrtcRuntime = olcrtc) {
+        runtime.setProtector(object : SocketProtector {
             override fun protect(fd: Long): Boolean {
                 if (connectionMode == AndroidConnectionMode.Proxy) return true
                 return this@OlcboxVpnService.protect(fd.toInt())
@@ -1203,9 +1206,9 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
-     * Start the transport for [location], branching on its kind: olcrtc runs the
-     * engine in this process ([startMobile]), which routes by itself under a
-     * bypass; vless/hysteria2/xhttp start a sing-box / Xray core subprocess via
+     * Start the transport for [location], branching on its kind: olcrtc runs one
+     * engine ([startMobile]) or a bonded pool ([startMobileBond]); a plain room routes
+     * by itself under a bypass; vless/hysteria2/xhttp start a sing-box / Xray core subprocess via
      * [startCore]. Both leave the hev bridge pointed at the right SOCKS port
      * (via [activeCorePort]).
      */
@@ -1219,7 +1222,11 @@ class OlcboxVpnService : VpnService() {
         return if (location.kind == LocationKind.Olcrtc) {
             activeCorePort = null
             activeCoreLogin = null
-            startMobile(location, upstream, requestedGeneration, setErrorOnFailure, routing)
+            if (location.bondVlessLink.isNullOrBlank()) {
+                startMobile(location, upstream, requestedGeneration, setErrorOnFailure, routing)
+            } else {
+                startMobileBond(location, upstream, requestedGeneration, setErrorOnFailure, routing)
+            }
         } else {
             // A core is a process of its own and needs no binding. One left from
             // an olcRTC room on mobile data would keep this process's own
@@ -1246,14 +1253,20 @@ class OlcboxVpnService : VpnService() {
         location: LocationConfig,
         setErrorOnFailure: Boolean,
         routing: Routing,
-        upstream: Network
+        upstream: Network,
+        bondRoomPorts: List<Int>? = null,
     ): Boolean {
         val tun = connectionMode == AndroidConnectionMode.Tun
         val port = if (tun) sessionCorePort.acquire() else socksListenPort
         val login = if (tun) SocksLogin.of(socksUsername, socksPassword) else null
         return try {
-            val raw = location.rawLink ?: error("core location has no link")
-            val spec = LinkParser.parse(raw) ?: error("unparseable core link")
+            val spec = if (bondRoomPorts == null) {
+                val raw = location.rawLink ?: error("core location has no link")
+                LinkParser.parse(raw) ?: error("unparseable core link")
+            } else {
+                val raw = location.bondVlessLink ?: error("bonded location has no VLESS link")
+                LinkParser.parse(raw) ?: error("unparseable bonded VLESS link")
+            }
             stopCoreProcesses()
             waitForSocksPortReleased(port, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             val label: String
@@ -1265,7 +1278,37 @@ class OlcboxVpnService : VpnService() {
             // answers proves nothing about who answers.
             val alive: () -> Boolean
             val fronted = routing is Routing.Rules && connectionMode == AndroidConnectionMode.Tun
-            if (spec is OutboundSpec.Vless && spec.transport is TransportSpec.Xhttp) {
+            if (bondRoomPorts != null) {
+                val bondSpec = spec as? OutboundSpec.Vless ?: error("bond carrier is not VLESS")
+                val xrayPort = freeLoopbackPort()
+                xrayCore.start(
+                    XrayConfig.buildVlessBond(
+                        bondSpec,
+                        roomPorts = bondRoomPorts,
+                        roomUsername = socksUsername,
+                        roomPassword = socksPassword,
+                        socksPort = xrayPort,
+                        verboseLogs = verboseDebugLogs,
+                        login = login,
+                    )
+                )
+                singBoxCore.start(
+                    SingBoxConfig.buildSocksChain(
+                        xrayPort,
+                        socksPort = port,
+                        username = login?.username.orEmpty(),
+                        password = login?.password.orEmpty(),
+                        routing = routing,
+                        verboseLogs = verboseDebugLogs,
+                        login = login,
+                    )
+                )
+                label = "sing-box front + Xray/Mamba x4"
+                diagnose = { singBoxCore.diagnostics() + "\n" + xrayCore.diagnostics() }
+                alive = {
+                    olcRtcBond?.isRunning() == true && singBoxCore.isRunning() && xrayCore.isRunning()
+                }
+            } else if (spec is OutboundSpec.Vless && spec.transport is TransportSpec.Xhttp) {
                 if (fronted) {
                     // Xray does not route; sing-box does, so it goes in front.
                     // Both ports are loopback and both demand the login: the one
@@ -1395,6 +1438,103 @@ class OlcboxVpnService : VpnService() {
         return isLocalSocksPortOpen(port)
     }
 
+    private suspend fun startMobileBond(
+        location: LocationConfig,
+        upstream: Network,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean,
+        routing: Routing,
+    ): Boolean {
+        val keepProcessBound = shouldKeepProcessBound(upstream)
+        val config = location.normalized()
+        return try {
+            val rooms = config.bondedRooms()
+            require(rooms.size == 4) { "a bonded location requires four rooms" }
+            val ports = mutableListOf<Int>()
+            while (ports.size < 4) {
+                val port = freeLoopbackPort()
+                require(port !in ports) { "could not allocate four distinct room ports" }
+                ports += port
+            }
+            resetRtcHealthState()
+            ports.forEach { port ->
+                waitForSocksPortReleased(port, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+                if (isLocalSocksPortOpen(port)) {
+                    throw IllegalStateException("SOCKS port $port is still in use")
+                }
+            }
+            waitForJitsiRoomCleanup(config.bypassProvider)
+            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+
+            val runtimes = rooms.map { Mobile.new_() }
+            runtimes.forEach { runtime -> installMobileCallbacks(runtime) }
+            val bond = OlcRtcBond(runtimes.map(::GomobileOlcRtcBondRuntime))
+            olcRtcBond = bond
+            bondRoomPorts = ports
+            lastMobileProvider = config.bypassProvider
+            val deviceId = deviceIdentityProvider.hwid().orEmpty()
+            runtimes.forEachIndexed { index, runtime ->
+                configureMobileTransport(
+                    config,
+                    upstream,
+                    directRules = "",
+                    runtime = runtime,
+                    listenHost = AndroidSocksProxySettings.DEFAULT_HOST,
+                )
+                runtime.setUDP(false)
+                runtime.setProvider(config.bypassProvider)
+                runtime.setRoom(rooms[index])
+                runtime.setDeviceID(deviceId)
+                runtime.setKey(config.key)
+                runtime.setSocksPort(ports[index].toLong())
+                runtime.setSocksCredentials(socksUsername, socksPassword)
+            }
+            addLog("Starting olcRTC Mamba x4 provider=${config.bypassProvider}, transport=${config.transport}")
+            bond.start(OLCRTC_READY_TIMEOUT_MS.toInt())
+            if (requestedGeneration != generation) {
+                addLog("olcRTC bond start superseded")
+                return false
+            }
+            coroutineContext.ensureActive()
+            if (!startCore(config, setErrorOnFailure, routing, upstream, bondRoomPorts = ports)) {
+                stopMobileAndWait()
+                return false
+            }
+            addLog("olcRTC Mamba x4 ready on ${ports.joinToString()}")
+            markRtcConnected()
+            if (keepProcessBound) {
+                addLog("Keeping olcRTC bond bound to ${getNetName(upstream)}")
+            }
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("olcRTC bond start canceled")
+                unbindProcessFromNetwork()
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Bonded transport failed"
+            if (staleRequest) {
+                addLog("olcRTC bond start canceled: $message")
+            } else {
+                addLog("olcRTC bond start failed: $message")
+            }
+            unbindProcessFromNetwork()
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification("Connection failed")
+            }
+            false
+        } finally {
+            if (!keepProcessBound || olcRtcBond?.isRunning() != true || activeCorePort == null) {
+                unbindProcessFromNetwork()
+            }
+        }
+    }
+
     private suspend fun startMobile(
         location: LocationConfig,
         upstream: Network,
@@ -1484,19 +1624,25 @@ class OlcboxVpnService : VpnService() {
         delay(waitMs)
     }
 
-    private fun configureMobileTransport(location: LocationConfig, upstream: Network?, directRules: String) {
+    private fun configureMobileTransport(
+        location: LocationConfig,
+        upstream: Network?,
+        directRules: String,
+        runtime: OlcrtcRuntime = olcrtc,
+        listenHost: String = socksListenHost,
+    ) {
         val config = location.normalized()
-        olcrtc.setTransport(config.transport)
+        runtime.setTransport(config.transport)
         // The upstream network's own resolvers first, the public operator
         // behind them: some mobile networks answer only their own (olcbox#16).
         // Direct names under a bypass are resolved on the same list.
-        olcrtc.setDNS(upstreamDnsList(upstream))
-        olcrtc.setSocksListenHost(socksListenHost)
-        olcrtc.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
+        runtime.setDNS(upstreamDnsList(upstream))
+        runtime.setSocksListenHost(listenHost)
+        runtime.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
         // Set on every start, the empty text included: the one Runtime keeps
         // its rules across Starts, so Global after a bypass would keep them.
         // Parsed here, so a list the engine refuses fails this start loudly.
-        olcrtc.setDirectRules(directRules)
+        runtime.setDirectRules(directRules)
         if (directRules.isNotEmpty()) {
             addLog("Routing: olcRTC takes ${directRules.count { it == '\n' }} direct rules")
         }
@@ -1504,13 +1650,13 @@ class OlcboxVpnService : VpnService() {
         // the relay direct flows to carry (OlcRtcUdpRelay). Set on every start,
         // for the same reason as the rules: a WB room after a Jitsi one would
         // otherwise run with no UDP.
-        olcrtc.setUDP(
+        runtime.setUDP(
             OlcRtcUdpRelay.enabled(config.bypassProvider, config.transport, directRules = directRules.isNotEmpty())
         )
         // Set on every start too, "off" included: the Runtime keeps a profile
         // across Starts, so switching the setting off would otherwise not stick.
         val dtlsProfile = OlcrtcDtls.profile(routingSettings.olcrtcChromeDtls)
-        olcrtc.setDTLSProfile(dtlsProfile)
+        runtime.setDTLSProfile(dtlsProfile)
         if (dtlsProfile != OlcrtcDtls.OFF) {
             addLog("olcRTC handshake: $dtlsProfile")
         }
@@ -2027,7 +2173,8 @@ class OlcboxVpnService : VpnService() {
 
     private fun stopMobile() {
         val provider = lastMobileProvider
-        val wasRunning = olcrtc.isRunning()
+        val bond = olcRtcBond
+        val wasRunning = olcrtc.isRunning() || bond?.isRunning() == true
         // Logged rather than swallowed. A stop that misses its deadline is the
         // difference between the next room joining and "olcRTC runtime is
         // already active", and for one whole debugging session this line threw
@@ -2035,9 +2182,13 @@ class OlcboxVpnService : VpnService() {
         // could see had failed to stop.
         runCatching { olcrtc.stop(MOBILE_STOP_TIMEOUT_MS) }
             .onFailure { addLog("olcRTC stop did not finish in time: ${it.message ?: it}") }
+        runCatching { bond?.stop(MOBILE_STOP_TIMEOUT_MS.toInt()) }
+            .onFailure { addLog("olcRTC bond stop did not finish in time: ${it.message ?: it}") }
+        olcRtcBond = null
+        bondRoomPorts = emptyList()
         // Also tear down any active sing-box / Xray core (no-op if none running).
         runCatching { stopCoreProcesses() }
-        if (wasRunning && provider == LocationConfig.PROVIDER_JITSI) {
+        if ((wasRunning || bond != null) && provider == LocationConfig.PROVIDER_JITSI) {
             lastJitsiStopCompletedAtMs = System.currentTimeMillis()
         }
     }
@@ -2048,9 +2199,9 @@ class OlcboxVpnService : VpnService() {
     }
 
     private suspend fun stopMobileAndWait() {
-        val socksPort = socksListenPort
+        val ports = (listOfNotNull(activeCorePort) + bondRoomPorts + socksListenPort).distinct()
         stopMobile()
-        waitForSocksPortReleased(socksPort)
+        ports.forEach { waitForSocksPortReleased(it) }
     }
 
     private suspend fun waitForSocksPortReleased(
@@ -2344,7 +2495,9 @@ class OlcboxVpnService : VpnService() {
      * seconds after it came up and restarted it, forever.
      */
     private fun isActiveTransportRunning(): Boolean =
-        if (activeCorePort != null) {
+        if (olcRtcBond != null) {
+            olcRtcBond?.isRunning() == true && singBoxCore.isRunning() && xrayCore.isRunning()
+        } else if (activeCorePort != null) {
             singBoxCore.isRunning() || xrayCore.isRunning()
         } else {
             olcrtc.isRunning()
@@ -2426,9 +2579,16 @@ class OlcboxVpnService : VpnService() {
         }
         // A running olcRTC re-points its lookups at the new network's resolvers
         // at once; the engine applies SetDNS live and refuses a malformed list.
-        if (network != null && olcrtc.isRunning()) {
-            runCatching { olcrtc.setDNS(upstreamDnsList(network)) }
-                .onFailure { addLog("olcRTC resolvers not updated: ${it.message}") }
+        if (network != null) {
+            val servers = upstreamDnsList(network)
+            if (olcrtc.isRunning()) {
+                runCatching { olcrtc.setDNS(servers) }
+                    .onFailure { addLog("olcRTC resolvers not updated: ${it.message}") }
+            }
+            if (olcRtcBond?.isRunning() == true) {
+                runCatching { olcRtcBond?.setDNS(servers) }
+                    .onFailure { addLog("olcRTC bond resolvers not updated: ${it.message}") }
+            }
         }
     }
 
