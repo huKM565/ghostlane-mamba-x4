@@ -23,7 +23,8 @@ internal data class OlcRtcCommand(
      * only when it is not [org.olcbox.app.net.OlcrtcDtls.OFF], so the yaml of
      * a default run is the one an engine without the setting reads.
      */
-    val dtlsProfile: String = OlcrtcDtls.OFF
+    val dtlsProfile: String = OlcrtcDtls.OFF,
+    val udpEnabled: Boolean = true,
 ) {
     fun args(configPath: Path): List<String> {
         return listOf(binary.toString(), configPath.toString())
@@ -59,10 +60,9 @@ internal data class OlcRtcCommand(
                 appendLine("dtls:")
                 appendLine("  profile: ${dtlsProfile.yamlValue()}")
             }
-            // The engine's UDP relay is opt-in from yaml; without this line
-            // SOCKS5 UDP ASSOCIATE is refused and calls fall back to nothing.
+            // Explicit for ordinary rooms and for bonded carriers, which disable it.
             appendLine("udp:")
-            appendLine("  enabled: true")
+            appendLine("  enabled: $udpEnabled")
             when (config.transport) {
                 LocationConfig.TRANSPORT_VP8CHANNEL -> {
                     appendLine("vp8:")

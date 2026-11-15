@@ -11,7 +11,7 @@ class DesktopBrandingTest {
     @Test
     fun windowsPackageHasItsOwnIdentity() {
         val build = File("../desktopApp/build.gradle.kts").readText()
-        assertTrue("val desktopPackageName = \"ИлюхаLine\"" in build)
+        assertTrue("val desktopPackageName = \"IlyukhaLine\"" in build)
         assertTrue("upgradeUuid = \"b3c2e0cb-9b3e-4f6c-9e2a-6a2c47e3c815\"" in build)
         assertNotEquals(
             "6f0aaf78-dbed-4745-9d95-9e63f10a30de",
@@ -28,7 +28,7 @@ class DesktopBrandingTest {
             System.setProperty("os.name", "Windows 11")
             System.setProperty("user.home", home.toString())
             assertEquals(
-                home.resolve("AppData").resolve("Roaming").resolve("ИлюхаLine"),
+                home.resolve("AppData").resolve("Roaming").resolve("IlyukhaLine"),
                 DesktopPaths.appDataDir(),
             )
         } finally {

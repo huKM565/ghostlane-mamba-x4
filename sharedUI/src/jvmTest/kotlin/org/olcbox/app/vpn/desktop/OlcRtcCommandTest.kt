@@ -43,6 +43,25 @@ class OlcRtcCommandTest {
     }
 
     @Test
+    fun bondedRoomsDisableNativeUdpAndDirectRules() {
+        val rooms = (1..4).map { index ->
+            command(LocationConfig.PROVIDER_JITSI, LocationConfig.TRANSPORT_DATACHANNEL).copy(
+                location = command(LocationConfig.PROVIDER_JITSI, LocationConfig.TRANSPORT_DATACHANNEL)
+                    .location.copy(id = "https://meet.example/olcrtc-room-$index"),
+                socksPort = 21080 + index,
+                udpEnabled = false,
+            ).yaml()
+        }
+        rooms.forEachIndexed { index, yaml ->
+            assertContains(yaml, "id: 'https://meet.example/olcrtc-room-${index + 1}'")
+            assertContains(yaml, "port: ${21081 + index}")
+            assertContains(yaml, "udp:\n  enabled: false")
+            assertFalse("route:" in yaml, yaml)
+        }
+        assertContains(command(LocationConfig.PROVIDER_JITSI, LocationConfig.TRANSPORT_DATACHANNEL).yaml(), "udp:\n  enabled: true")
+    }
+
+    @Test
     fun theEngineIsToldWhereItsDirectRulesAreAndOnlyThen() {
         val without = command(LocationConfig.PROVIDER_TELEMOST, LocationConfig.TRANSPORT_DATACHANNEL).yaml()
         assertFalse("route:" in without, without)

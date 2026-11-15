@@ -119,9 +119,9 @@ val olcrtcRepoDir = olcrtcRepo.map { rootProject.file(it) }
 val generatedNativeResources = layout.buildDirectory.dir("generated/desktopNativeResources")
 val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/hev-socks5-tunnel")
 val currentBuildOs = OperatingSystem.current()
-// Installed application name (ИлюхаLine.exe on Windows). The fork has its own
+// Installed application name (IlyukhaLine.exe on Windows). The fork has its own
 // Windows upgradeUuid and data directory, so it installs beside Ghostlane.
-val desktopPackageName = "ИлюхаLine"
+val desktopPackageName = "IlyukhaLine"
 val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("1.0.0").get()
 val wintunVersion = "0.14.1"
 val currentBuildTargetFormats = when {
@@ -576,7 +576,7 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("appIcons/WindowsIcon.ico"))
-                menuGroup = "ИлюхаLine"
+                menuGroup = "IlyukhaLine"
                 shortcut = true
                 dirChooser = true
                 upgradeUuid = "b3c2e0cb-9b3e-4f6c-9e2a-6a2c47e3c815"

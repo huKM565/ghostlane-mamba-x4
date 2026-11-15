@@ -9,8 +9,8 @@ Android-форк уже запускает четыре Mamba-комнаты ч�
 - Видимое имя на Android и Windows: `ИлюхаLine`.
 - Android applicationId: `ru.hukm.ilyukhaline`.
 - Внутренние Kotlin/Java package names и существующие ссылки импорта не меняются.
-- Windows package name: `ИлюхаLine`; получает собственный постоянный upgradeUuid, отличный от Ghostlane.
-- Windows использует `%APPDATA%\ИлюхаLine`, а не общий `%APPDATA%\Olcbox`, поэтому настройки, подписки, логи и cache-file не конфликтуют с Ghostlane.
+- Windows package name и технические пути: `IlyukhaLine` в ASCII; видимое имя остаётся `ИлюхаLine`. Получает собственный постоянный upgradeUuid, отличный от Ghostlane.
+- Windows использует `%APPDATA%\IlyukhaLine`, а не общий `%APPDATA%\Olcbox`, поэтому настройки, подписки, логи и cache-file не конфликтуют с Ghostlane.
 - Каждая попытка запуска Windows TUN получает собственный cache-file, удаляемый при очистке: повторные или оставшиеся sing-box процессы не должны блокировать общий `windows-tun-cache.db`.
 - APK сохраняется как `~/Загрузки/ИлюхаLine-1.0.472-mamba-x4.apk`.
 

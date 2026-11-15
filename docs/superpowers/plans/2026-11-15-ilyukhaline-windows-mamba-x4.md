@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Visible brand is `ИлюхаLine`; Android applicationId is `ru.hukm.ilyukhaline`.
-- Windows has its own upgradeUuid and `%APPDATA%\ИлюхаLine`; do not share Ghostlane's cache or settings.
+- Windows has its own upgradeUuid and `%APPDATA%\IlyukhaLine`; technical package/path names use ASCII `IlyukhaLine`, while the visible name remains `ИлюхаLine`.
 - Palette is cyan `22D3EE`, dark cyan `103743`, orange `FF8A65`; layout does not change.
 - Bonded profiles have exactly four rooms and four unique loopback ports.
 - Bonded olcRTC configurations have no direct rules and `udp.enabled=false`; UDP belongs to VLESS Mux/XUDP.
