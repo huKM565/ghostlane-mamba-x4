@@ -1,0 +1,88 @@
+name: Build IlyukhaLine for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - mamba-x4-vless
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout IlyukhaLine
+        uses: actions/checkout@v7
+        with:
+          path: ilyukhaline
+
+      - name: Checkout pinned olcRTC
+        uses: actions/checkout@v7
+        with:
+          repository: ghostlane-project/olcrtc
+          ref: 2d4266af3947f4d9940efafb0d5aabb6207f6659
+          path: olcrtc
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache-dependency-path: olcrtc/go.sum
+
+      - name: Build sing-box
+        shell: bash
+        working-directory: ilyukhaline
+        run: bash scripts/build-singbox.sh desktopApp/src/main/resources/native/sing-box.exe
+
+      - name: Bundle Xray and verify native cores
+        shell: pwsh
+        working-directory: ilyukhaline
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "desktopApp/src/main/resources/native"
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.7.11/Xray-windows-64.zip" -OutFile xray.zip
+          Expand-Archive xray.zip -DestinationPath xray-dist -Force
+          $xray = Get-ChildItem xray-dist -Recurse -Filter "xray.exe" | Select-Object -First 1
+          Copy-Item $xray.FullName "$dest/xray.exe"
+          & "$dest/sing-box.exe" version | Select-Object -First 1
+          & "$dest/xray.exe" version | Select-Object -First 1
+
+      - name: Test and package Windows
+        shell: pwsh
+        working-directory: ilyukhaline
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:OLCRTC_REPO = "${{ github.workspace }}\olcrtc"
+          .\gradlew.bat "-Polcbox.version=1.0.472" :sharedUI:jvmTest :desktopApp:packageReleaseExe :desktopApp:packageReleaseMsi :desktopApp:packageReleasePortableZip --stacktrace
+          if ($LASTEXITCODE -ne 0) { throw "Gradle build failed" }
+
+      - name: Prepare artifacts
+        shell: pwsh
+        working-directory: ilyukhaline
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = Get-ChildItem "desktopApp/build/compose/binaries/main-release/exe/*.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "desktopApp/build/compose/binaries/main-release/msi/*.msi" | Select-Object -First 1
+          $zip = Get-ChildItem "desktopApp/build/compose/binaries/main-release/portable/*.zip" | Select-Object -First 1
+          if ($null -eq $exe -or $null -eq $msi -or $null -eq $zip) { throw "A Windows package is missing" }
+          Copy-Item $exe.FullName "dist/IlyukhaLine-1.0.472-windows-amd64.exe"
+          Copy-Item $msi.FullName "dist/IlyukhaLine-1.0.472-windows-amd64.msi"
+          Copy-Item $zip.FullName "dist/IlyukhaLine-1.0.472-windows-amd64-portable.zip"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: IlyukhaLine-windows-amd64
+          path: ilyukhaline/dist/IlyukhaLine-*
