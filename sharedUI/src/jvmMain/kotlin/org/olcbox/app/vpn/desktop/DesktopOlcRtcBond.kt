@@ -10,8 +10,8 @@ enum class DesktopBondWatchDecision {
     Restart,
 }
 
-fun desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>): Boolean =
-    active != balanced || active.size < 4
+fun desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>, expectedSize: Int): Boolean =
+    active != balanced || active.size < expectedSize
 
 private val olcRtcRoomParticipants = Regex("""\bjitsi: room participants=(\d+)\s*$""")
 
@@ -25,9 +25,10 @@ fun desktopBondWatchDecision(
     coresAlive: Boolean,
     activeRooms: List<Int>?,
     balancedRooms: List<Int>,
+    expectedSize: Int,
 ): DesktopBondWatchDecision {
     if (activeRooms == null) return if (coresAlive) DesktopBondWatchDecision.Continue else DesktopBondWatchDecision.Restart
-    if (desktopBondNeedsRefresh(activeRooms, balancedRooms)) return DesktopBondWatchDecision.Refresh
+    if (desktopBondNeedsRefresh(activeRooms, balancedRooms, expectedSize)) return DesktopBondWatchDecision.Refresh
     return if (coresAlive) DesktopBondWatchDecision.Continue else DesktopBondWatchDecision.Restart
 }
 
@@ -46,8 +47,8 @@ class DesktopOlcRtcBond(
     private val readyIndexes = readyIndexes.toMutableSet()
 
     init {
-        require(rooms.size == 4) { "a desktop olcRTC bond requires exactly four rooms" }
-        require(rooms.map { it.port }.distinct().size == 4) { "bonded rooms need distinct ports" }
+        require(rooms.size == 4 || rooms.size == 12) { "a desktop olcRTC bond requires exactly four or twelve rooms" }
+        require(rooms.map { it.port }.distinct().size == rooms.size) { "bonded rooms need distinct ports" }
     }
 
     data class Room(

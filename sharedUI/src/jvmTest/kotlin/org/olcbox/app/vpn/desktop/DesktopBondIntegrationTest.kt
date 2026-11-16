@@ -35,6 +35,23 @@ class DesktopBondIntegrationTest {
     }
 
     @Test
+    fun managerUsesPerPathSettingsAndKeepsRefreshSafetyInvariants() {
+        assertTrue("planBondPaths(config, ::allocateBondPort)" in manager)
+        assertTrue("setDesktopBondRooms(paths.indices.toList())" in manager)
+        assertTrue("path.provider" in manager)
+        assertTrue("path.transport" in manager)
+        assertTrue("path.room" in manager)
+        assertTrue("path.key" in manager)
+        assertFalse("rooms.size == 4" in manager)
+        assertTrue("expectedSize = bond?.rooms?.size ?: 0" in manager)
+        assertTrue("val frontPort = line.frontPort ?: line.corePort" in manager)
+        assertTrue(
+            Regex("if \\(activeRooms\\.isEmpty\\(\\)\\) return false").findAll(manager).count() >= 2,
+            "both pre-recovery and post-recovery empty active sets must avoid an empty Xray config"
+        )
+    }
+
+    @Test
     fun everyTunAttemptHasItsOwnCacheFile() {
         val oldOs = System.getProperty("os.name")
         try {

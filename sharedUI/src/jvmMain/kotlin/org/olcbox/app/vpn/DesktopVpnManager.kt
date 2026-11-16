@@ -50,6 +50,7 @@ import org.olcbox.app.net.XrayConfig
 import org.olcbox.app.net.LocationKind
 import org.olcbox.app.net.OlcrtcDirectRules
 import org.olcbox.app.net.OlcrtcDtls
+import org.olcbox.app.net.planBondPaths
 import org.olcbox.app.net.Routing
 import org.olcbox.app.net.SessionFailover
 import org.olcbox.app.net.SmartConnect
@@ -1720,21 +1721,25 @@ class DesktopVpnManager private constructor(
         verboseLogs: Boolean,
     ): Int {
         val config = location.normalized()
-        val rooms = config.bondedRooms()
-        require(rooms.size == 4) { "a bonded desktop location requires four rooms" }
+        val (paths, ports) = planBondPaths(config, ::allocateBondPort)
         stopDesktopBond()
         stopDesktopCores()
-        setDesktopBondRooms(List(4) { it })
+        setDesktopBondRooms(paths.indices.toList())
         val launchGeneration = desktopBondGeneration
         val started = mutableListOf<DesktopOlcRtcBond.Room>()
         val readyRooms = mutableSetOf<Int>()
         try {
             val binary = DesktopNativeAssets.resolveOlcRtcBinary()
-            rooms.forEachIndexed { index, room ->
-                val port = allocateBondPort()
+            paths.forEachIndexed { index, path ->
+                val port = ports[index]
                 val command = OlcRtcCommand(
                     binary = binary,
-                    location = config.copy(id = room),
+                    location = config.copy(
+                        id = path.room,
+                        key = path.key,
+                        bypassProvider = path.provider,
+                        transport = path.transport,
+                    ),
                     socksHost = socksSettings.host,
                     socksPort = port,
                     socksUser = socksSettings.username,
@@ -1822,7 +1827,7 @@ class DesktopVpnManager private constructor(
                 error("bonded sing-box front not ready on $frontPort")
             }
             activeCorePort = frontPort
-            addLog("Desktop Mamba x4 ready; sing-box front on 127.0.0.1:$frontPort")
+            addLog("Desktop olcRTC bond x${bond.activeIndexes().size}/${paths.size} ready; sing-box front on 127.0.0.1:$frontPort")
             return frontPort
         } catch (error: Throwable) {
             if (desktopOlcRtcBond == null) {
@@ -2788,6 +2793,7 @@ class DesktopVpnManager private constructor(
                     coresAlive = coresAlive(),
                     activeRooms = bond?.activeIndexes(),
                     balancedRooms = desktopBalancedRooms,
+                    expectedSize = bond?.rooms?.size ?: 0,
                 )
                 if (decision == DesktopBondWatchDecision.Continue || refreshPending.get()) continue
 

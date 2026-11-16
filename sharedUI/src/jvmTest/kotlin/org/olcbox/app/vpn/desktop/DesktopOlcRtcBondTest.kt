@@ -11,9 +11,10 @@ import kotlin.test.assertTrue
 
 class DesktopOlcRtcBondTest {
     @Test
-    fun bondRequiresFourRoomsAndKeepsRunningUntilTheLastRoomStops() {
+    fun bondRequiresFourOrTwelveRoomsAndKeepsRunningUntilTheLastRoomStops() {
         val rooms = rooms(4)
         assertFailsWith<IllegalArgumentException> { DesktopOlcRtcBond(rooms(3)) }
+        assertFailsWith<IllegalArgumentException> { DesktopOlcRtcBond(rooms(5)) }
         val bond = DesktopOlcRtcBond(rooms)
         assertTrue(bond.isRunning())
         (rooms[3].process as FakeProcess).alive = false
@@ -27,6 +28,24 @@ class DesktopOlcRtcBondTest {
     }
 
     @Test
+    fun twelveRoomBondKeepsDistinctPortsAndRestartsADeadProcess() {
+        val rooms = rooms(12)
+        val replacement = FakeProcess(99)
+        val stopped = rooms[11].copy(restart = { replacement })
+        val bond = DesktopOlcRtcBond(rooms.dropLast(1) + stopped)
+        (stopped.process as FakeProcess).alive = false
+
+        assertEquals(11, bond.ports().size)
+        assertTrue(bond.isRunning())
+        val active = bond.recover()
+
+        assertEquals((0..11).toList(), active)
+        assertEquals(replacement, stopped.process)
+        assertEquals((21081..21092).toList(), bond.ports())
+        assertEquals(12, bond.ports().toSet().size)
+    }
+
+    @Test
     fun onlyReadyRoomsAreActive() {
         val bond = DesktopOlcRtcBond(rooms(4), readyIndexes = setOf(1))
         assertEquals(listOf(1), bond.activeIndexes())
@@ -37,10 +56,12 @@ class DesktopOlcRtcBondTest {
     }
 
     @Test
-    fun watcherMustRecoverAStableThreeRoomBondBackToFourRooms() {
-        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2, 3)))
-        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2)))
-        assertFalse(desktopBondNeedsRefresh(listOf(0, 1, 2, 3), listOf(0, 1, 2, 3)))
+    fun watcherRecoversAnIncompleteBondBackToItsExpectedSize() {
+        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2, 3), expectedSize = 4))
+        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2), expectedSize = 4))
+        assertFalse(desktopBondNeedsRefresh(listOf(0, 1, 2, 3), listOf(0, 1, 2, 3), expectedSize = 4))
+        assertTrue(desktopBondNeedsRefresh((0..10).toList(), (0..10).toList(), expectedSize = 12))
+        assertFalse(desktopBondNeedsRefresh((0..11).toList(), (0..11).toList(), expectedSize = 12))
     }
 
     @Test
