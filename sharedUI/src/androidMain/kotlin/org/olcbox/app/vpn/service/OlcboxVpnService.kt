@@ -261,6 +261,8 @@ class OlcboxVpnService : VpnService() {
     private val olcrtc: OlcrtcRuntime by lazy { Mobile.new_() }
     private var olcRtcBond: OlcRtcBond? = null
     private var bondRoomPorts: List<Int> = emptyList()
+    private var bondBalancedRooms: List<Int> = emptyList()
+    private var bondLocation: LocationConfig? = null
 
     private data class StartOptions(
         val connectionMode: AndroidConnectionMode,
@@ -1471,6 +1473,7 @@ class OlcboxVpnService : VpnService() {
             val bond = OlcRtcBond(runtimes.map(::GomobileOlcRtcBondRuntime))
             olcRtcBond = bond
             bondRoomPorts = ports
+            bondLocation = config
             lastMobileProvider = config.bypassProvider
             val deviceId = deviceIdentityProvider.hwid().orEmpty()
             runtimes.forEachIndexed { index, runtime ->
@@ -1490,17 +1493,20 @@ class OlcboxVpnService : VpnService() {
                 runtime.setSocksCredentials(socksUsername, socksPassword)
             }
             addLog("Starting olcRTC Mamba x4 provider=${config.bypassProvider}, transport=${config.transport}")
-            bond.start(OLCRTC_READY_TIMEOUT_MS.toInt())
+            val activeRooms = bond.start(OLCRTC_READY_TIMEOUT_MS.toInt())
+            bondBalancedRooms = activeRooms
+            OlcboxVpnState.setBondRooms(activeRooms)
             if (requestedGeneration != generation) {
                 addLog("olcRTC bond start superseded")
                 return false
             }
             coroutineContext.ensureActive()
-            if (!startCore(config, setErrorOnFailure, routing, upstream, bondRoomPorts = ports)) {
+            val activePorts = activeRooms.map(ports::get)
+            if (!startCore(config, setErrorOnFailure, routing, upstream, bondRoomPorts = activePorts)) {
                 stopMobileAndWait()
                 return false
             }
-            addLog("olcRTC Mamba x4 ready on ${ports.joinToString()}")
+            addLog("olcRTC Mamba x${activeRooms.size} ready on ${activePorts.joinToString()}")
             markRtcConnected()
             if (keepProcessBound) {
                 addLog("Keeping olcRTC bond bound to ${getNetName(upstream)}")
@@ -1971,6 +1977,41 @@ class OlcboxVpnService : VpnService() {
     private fun reconnectingText(): String =
         if (connectionMode == AndroidConnectionMode.Tun && vpnInterface != null) HOLDING_TEXT else "Reconnecting..."
 
+    private suspend fun refreshMobileBond() {
+        val requestGeneration = generation
+        tunnelMutex.withLock {
+            val bond = olcRtcBond ?: return@withLock
+            val location = bondLocation ?: return@withLock
+            fun current(): Boolean =
+                requestGeneration == generation &&
+                    bond === olcRtcBond &&
+                    OlcboxVpnState.status.value is VpnStatus.Connected
+            if (!current()) return@withLock
+
+            var activeRooms = bond.activeIndexes()
+            OlcboxVpnState.setBondRooms(activeRooms)
+            if (activeRooms.size < 3) return@withLock
+            if (activeRooms != bondBalancedRooms && !rebalanceMobileBond(location, activeRooms)) {
+                return@withLock
+            }
+
+            activeRooms = bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt())
+            if (!current()) return@withLock
+            OlcboxVpnState.setBondRooms(activeRooms)
+            if (activeRooms.size < 3 || activeRooms == bondBalancedRooms) return@withLock
+            rebalanceMobileBond(location, activeRooms)
+        }
+    }
+
+    private suspend fun rebalanceMobileBond(location: LocationConfig, activeRooms: List<Int>): Boolean {
+        val upstream = findActiveUpstreamNetwork() ?: return false
+        val activePorts = activeRooms.map(bondRoomPorts::get)
+        addLog("olcRTC bond rooms changed; rebalancing Xray on ${activeRooms.map { it + 1 }}")
+        if (!startCore(location, false, routingFor(upstream), upstream, bondRoomPorts = activePorts)) return false
+        bondBalancedRooms = activeRooms
+        return true
+    }
+
     private fun startWatchdog() {
         watchdogJob?.cancel()
         watchdogTunStats = null
@@ -1979,6 +2020,7 @@ class OlcboxVpnService : VpnService() {
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 delay(WATCHDOG_INTERVAL_MS)
+                refreshMobileBond()
                 when {
                     !isActiveTransportRunning() -> {
                         val what = activeTransportLabel()
@@ -2064,8 +2106,9 @@ class OlcboxVpnService : VpnService() {
         startedBySystem = false
         setStatus(VpnStatus.Stopping)
         val cancelledStart = startupJob
+        val cancelledWatchdog = watchdogJob
         cancelledStart?.cancel()
-        watchdogJob?.cancel()
+        cancelledWatchdog?.cancel()
         networkLossJob?.cancel()
         recoveryJob?.cancel()
         recoveryJob = null
@@ -2087,8 +2130,8 @@ class OlcboxVpnService : VpnService() {
                     addLog("${activeModeLabel()} stopped")
                 }
 
+                withTimeoutOrNull(CANCELLED_BOND_RECOVERY_WAIT_MS) { cancelledWatchdog?.join() }
                 stopMobileAndWait()
-                resetRecoveryState()
                 // The start this stop cancelled runs on until its next
                 // suspension. It may have put up an interface or a tun2socks
                 // after the pass above looked for them, or written a status
@@ -2099,6 +2142,8 @@ class OlcboxVpnService : VpnService() {
                     if (vpnInterface != null || tun2socksToStop) stopVisibleVpnProcesses()
                     if (OlcboxVpnState.status.value !is VpnStatus.Disconnected) setStatus(VpnStatus.Disconnected)
                 }
+                stopMobileAndWait()
+                resetRecoveryState()
             } finally {
                 if (stopService && generation == cleanupGeneration) stopSelf()
             }
@@ -2186,6 +2231,9 @@ class OlcboxVpnService : VpnService() {
             .onFailure { addLog("olcRTC bond stop did not finish in time: ${it.message ?: it}") }
         olcRtcBond = null
         bondRoomPorts = emptyList()
+        bondBalancedRooms = emptyList()
+        bondLocation = null
+        OlcboxVpnState.setBondRooms(null)
         // Also tear down any active sing-box / Xray core (no-op if none running).
         runCatching { stopCoreProcesses() }
         if ((wasRunning || bond != null) && provider == LocationConfig.PROVIDER_JITSI) {
@@ -2294,6 +2342,12 @@ class OlcboxVpnService : VpnService() {
         threshold: Int
     ) {
         if (OlcboxVpnState.status.value !is VpnStatus.Connected) return
+        val bond = olcRtcBond
+        if (bond != null && !bond.needsFullRecovery()) {
+            OlcboxVpnState.setBondRooms(bond.activeIndexes())
+            addLog("$reason in one bond room; keeping the remaining rooms active")
+            return
+        }
 
         val now = System.currentTimeMillis()
         if (now - lastRtcConnectedAtMs < RTC_RECOVERY_GRACE_MS) return
@@ -3008,6 +3062,7 @@ class OlcboxVpnService : VpnService() {
         private const val OLCRTC_READY_TIMEOUT_MS = 35_000L
         private const val MOBILE_STOP_TIMEOUT_MS = 5_000L
         private const val PREVIOUS_STOP_WAIT_MS = 12_000L
+        private const val CANCELLED_BOND_RECOVERY_WAIT_MS = 2 * OLCRTC_READY_TIMEOUT_MS
         private const val JITSI_RESTART_SETTLE_MS = 2_000L
         private const val TUN2SOCKS_STOP_WAIT_MS = 1_000L
         private const val TUN2SOCKS_RESTART_WAIT_MS = 5_000L

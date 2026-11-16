@@ -11,13 +11,58 @@ import kotlin.test.assertTrue
 
 class DesktopOlcRtcBondTest {
     @Test
-    fun bondRequiresFourRoomsAndIsAliveOnlyWhenAllAreAlive() {
+    fun bondRequiresFourRoomsAndKeepsRunningWithThree() {
         val rooms = rooms(4)
         assertFailsWith<IllegalArgumentException> { DesktopOlcRtcBond(rooms(3)) }
         val bond = DesktopOlcRtcBond(rooms)
         assertTrue(bond.isRunning())
         (rooms[3].process as FakeProcess).alive = false
+        assertTrue(bond.isRunning())
+        assertEquals(listOf(21081, 21082, 21083), bond.ports())
+        assertEquals(listOf(0, 1, 2), bond.activeIndexes())
+        (rooms[2].process as FakeProcess).alive = false
         assertFalse(bond.isRunning())
+    }
+
+    @Test
+    fun watcherMustRecoverAStableThreeRoomBondBackToFourRooms() {
+        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2, 3)))
+        assertTrue(desktopBondNeedsRefresh(listOf(0, 1, 2), listOf(0, 1, 2)))
+        assertFalse(desktopBondNeedsRefresh(listOf(0, 1, 2, 3), listOf(0, 1, 2, 3)))
+    }
+
+    @Test
+    fun watcherContinuesOnlyAfterAHealthyRefreshAndRestartsAfterFailure() {
+        assertEquals(
+            DesktopBondWatchDecision.Continue,
+            desktopBondWatchDecisionAfterRefresh(Result.success(true), coresAlive = true),
+        )
+        assertEquals(
+            DesktopBondWatchDecision.Restart,
+            desktopBondWatchDecisionAfterRefresh(Result.success(true), coresAlive = false),
+        )
+        assertEquals(
+            DesktopBondWatchDecision.Restart,
+            desktopBondWatchDecisionAfterRefresh(Result.success(false), coresAlive = true),
+        )
+        assertEquals(
+            DesktopBondWatchDecision.Restart,
+            desktopBondWatchDecisionAfterRefresh(Result.failure(IllegalStateException("rebalance failed")), coresAlive = true),
+        )
+    }
+
+    @Test
+    fun recoverRestartsAndReturnsTheMissingRoom() {
+        val rooms = rooms(4)
+        val replacement = FakeProcess(44)
+        val stopped = rooms[3].copy(restart = { replacement })
+        val bond = DesktopOlcRtcBond(rooms.take(3) + stopped)
+        (stopped.process as FakeProcess).alive = false
+
+        val active = bond.recover()
+
+        assertEquals(listOf(0, 1, 2, 3), active)
+        assertEquals(replacement, stopped.process)
         assertEquals(listOf(21081, 21082, 21083, 21084), bond.ports())
     }
 

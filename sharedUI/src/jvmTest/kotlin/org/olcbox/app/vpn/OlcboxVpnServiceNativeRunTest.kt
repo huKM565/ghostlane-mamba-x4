@@ -132,4 +132,23 @@ class OlcboxVpnServiceNativeRunTest {
             ?: fail("the service does not say what a run of its own still to stop is")
         assertEquals("tun2socksStarted && !tun2socksStopRequested.get()", own)
     }
+
+    @Test
+    fun cleanupWaitsForRecoveryBeforeStoppingTransportAndStopsItAgainAfterCancelledStart() {
+        val cleanup = member("cleanup")
+        val watchdogJoin = cleanup.indexOf("cancelledWatchdog?.join()")
+        val startJoin = cleanup.indexOf("cancelledStart?.join()")
+        val transportStops = Regex("""stopMobileAndWait\(\)""").findAll(cleanup).map { it.range.first }.toList()
+
+        assertTrue(watchdogJoin >= 0, "cleanup does not wait for the bond watchdog it cancelled")
+        assertTrue(startJoin >= 0, "cleanup does not wait for the start it cancelled")
+        assertEquals(
+            2,
+            transportStops.size,
+            "cleanup stops the mobile transport before joining the cancelled start and again after that start can no longer restart it",
+        )
+        assertTrue(watchdogJoin < transportStops[0], "cleanup stops the bond before its recovery has finished")
+        assertTrue(transportStops[0] < startJoin, "cleanup joins the cancelled start before its final transport cleanup")
+        assertTrue(startJoin < transportStops[1], "cleanup has no final mobile transport cleanup after the cancelled start ended")
+    }
 }

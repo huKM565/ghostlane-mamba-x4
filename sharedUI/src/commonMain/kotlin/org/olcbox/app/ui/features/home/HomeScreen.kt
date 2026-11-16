@@ -129,6 +129,7 @@ fun HomeScreen(
 
     val state by viewModel.state.collectAsState()
     val connectedSince by viewModel.connectedSince.collectAsState()
+    val bondRooms by viewModel.bondRooms.collectAsState()
     val channelLatency by viewModel.channelLatency.collectAsState()
     val subscriptionSettings by viewModel.subscriptionSettings.collectAsState()
     val routingSettings by viewModel.routingSettings.collectAsState()
@@ -588,6 +589,7 @@ fun HomeScreen(
             model = model,
             selectedLocationId = selectedId,
             isConnected = state.isVpnConnected,
+            bondRooms = bondRooms,
             pingsState = pingsState,
             pingsStale = locationViewModel.stalePingIds.any { id -> locations.any { it.storageId == id } },
             olcrtcSlots = locationViewModel.olcrtcSlots,

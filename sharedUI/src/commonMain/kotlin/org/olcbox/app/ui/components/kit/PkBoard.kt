@@ -86,6 +86,8 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -284,7 +286,8 @@ fun PkRoomCard(
      * interface can tell you about, and the only other way out was a settings
      * screen the admin gate hides.
      */
-    trailing: (@Composable () -> Unit)? = null
+    trailing: (@Composable () -> Unit)? = null,
+    bondRooms: List<Boolean>? = null
 ) {
     val palette = LocalPkPalette.current
     val background by animateColorAsState(
@@ -428,6 +431,22 @@ fun PkRoomCard(
                 }
             }
         )
+
+        if (bondRooms != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                bondRooms.forEachIndexed { index, active ->
+                    val room = index + 1
+                    Text(
+                        text = "$room",
+                        style = pkMono(10, 0.4),
+                        color = if (active) Color(0xFF22C55E) else Color(0xFFEF4444),
+                        modifier = Modifier.semantics {
+                            contentDescription = "Room $room: ${if (active) "active" else "inactive"}"
+                        }
+                    )
+                }
+            }
+        }
 
         // Said where the seats would be, because their absence is the symptom the
         // user sees first — and said at all, because silence here is what makes a

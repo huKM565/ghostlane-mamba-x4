@@ -84,6 +84,9 @@ import org.olcbox.app.vpn.desktop.SessionEndpoint
 import org.olcbox.app.vpn.desktop.SingBoxTunTraffic
 import org.olcbox.app.vpn.desktop.TunnelTraffic
 import org.olcbox.app.vpn.desktop.DesktopOlcRtcBond
+import org.olcbox.app.vpn.desktop.DesktopBondWatchDecision
+import org.olcbox.app.vpn.desktop.desktopBondWatchDecision
+import org.olcbox.app.vpn.desktop.desktopBondWatchDecisionAfterRefresh
 import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -93,6 +96,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.olcbox.app.log.LogScrubber
 
 class DesktopVpnManager private constructor(
@@ -121,6 +125,9 @@ class DesktopVpnManager private constructor(
 
     private val _connectedSince = MutableStateFlow<Long?>(null)
     override val connectedSince: StateFlow<Long?> = _connectedSince.asStateFlow()
+
+    private val _bondRooms = MutableStateFlow<List<Boolean>?>(null)
+    override val bondRooms: StateFlow<List<Boolean>?> = _bondRooms.asStateFlow()
 
     /**
      * A tunnel session is counted by whoever owns its tunnel, a proxy session
@@ -246,6 +253,7 @@ class DesktopVpnManager private constructor(
     private var windowsTunInterface: String? = null
     private var windowsTunCacheFile: Path? = null
     private var desktopOlcRtcBond: DesktopOlcRtcBond? = null
+    private var desktopBalancedRooms: List<Int> = emptyList()
     private val windowsTunCore = org.olcbox.app.net.DesktopSingBoxController(onOutput = ::onWindowsTunOutput)
 
     /** The tun core said the system's filtering engine refused `strict_route`; see [startWindowsTun]. */
@@ -1702,19 +1710,27 @@ class DesktopVpnManager private constructor(
                 val builder = ProcessBuilder(command.args(configPath)).redirectErrorStream(true)
                 builder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
                 builder.environment()["no_proxy"] = "127.0.0.1,localhost"
-                val process = builder.start()
-                started += DesktopOlcRtcBond.Room(process, configPath, port)
-                scope.launch {
-                    process.inputStream.bufferedReader().useLines { lines ->
-                        lines.forEach { line -> addLog("rtc: $line") }
+                fun launchRoom(): Process {
+                    val launched = builder.start()
+                    scope.launch {
+                        launched.inputStream.bufferedReader().useLines { lines ->
+                            lines.forEach { line -> addLog("rtc: $line") }
+                        }
                     }
+                    return launched
                 }
+                val process = launchRoom()
+                started += DesktopOlcRtcBond.Room(process, configPath, port, restart = ::launchRoom)
                 if (!waitForCoreSocks(port) { process.isAlive }) {
-                    error("bonded olcRTC room ${index + 1} SOCKS not ready on $port")
+                    stopProcess(process)
+                    addLog("olcRTC room ${index + 1} did not become ready; continuing without it")
                 }
             }
             val bond = DesktopOlcRtcBond(started)
+            if (!bond.isRunning()) error("fewer than three bonded olcRTC rooms are ready")
             desktopOlcRtcBond = bond
+            desktopBalancedRooms = bond.activeIndexes()
+            _bondRooms.value = List(4) { it in desktopBalancedRooms }
 
             val spec = LinkParser.parse(config.bondVlessLink!!) as? OutboundSpec.Vless
                 ?: error("bond carrier is not VLESS")
@@ -1765,6 +1781,77 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    private suspend fun refreshDesktopBond(line: SessionLine): Boolean {
+        val bond = desktopOlcRtcBond ?: return true
+        var activeRooms = bond.activeIndexes()
+        _bondRooms.value = List(4) { it in activeRooms }
+        if (activeRooms.size < 3) return false
+        if (activeRooms != desktopBalancedRooms && !rebalanceDesktopBond(line, bond, activeRooms)) {
+            return false
+        }
+
+        activeRooms = recoverDesktopBondRooms(bond)
+        _bondRooms.value = List(4) { it in activeRooms }
+        if (activeRooms.size < 3) return false
+        if (activeRooms == desktopBalancedRooms) return true
+        return rebalanceDesktopBond(line, bond, activeRooms)
+    }
+
+    private suspend fun recoverDesktopBondRooms(bond: DesktopOlcRtcBond): List<Int> {
+        bond.recover()
+        bond.rooms.forEach { room ->
+            if (room.process.isAlive && !waitForCoreSocks(room.port) { room.process.isAlive }) {
+                stopProcess(room.process)
+            }
+        }
+        return bond.activeIndexes()
+    }
+
+    private suspend fun rebalanceDesktopBond(
+        line: SessionLine,
+        bond: DesktopOlcRtcBond,
+        activeRooms: List<Int>,
+    ): Boolean {
+        addLog("Desktop olcRTC bond rooms changed; rebalancing Xray on ${activeRooms.map { it + 1 }}")
+        val spec = LinkParser.parse(line.location.bondVlessLink!!) as? OutboundSpec.Vless
+            ?: error("bond carrier is not VLESS")
+        val xrayPort = allocateBondPort()
+        val frontPort = line.frontPort ?: line.corePort
+        val login = SocksLogin.of(line.socksSettings.username, line.socksSettings.password)
+        stopDesktopCores()
+        xrayCore.start(
+            XrayConfig.buildVlessBond(
+                spec,
+                roomPorts = bond.ports(),
+                roomUsername = line.socksSettings.username,
+                roomPassword = line.socksSettings.password,
+                socksPort = xrayPort,
+                verboseLogs = line.verboseLogs,
+                login = login,
+            )
+        )
+        if (!waitForCoreSocks(xrayPort) { xrayCore.isRunning() }) {
+            error("rebalanced Xray SOCKS not ready on $xrayPort")
+        }
+        singBoxCore.start(
+            SingBoxConfig.buildSocksChain(
+                xrayPort,
+                socksPort = frontPort,
+                username = login?.username.orEmpty(),
+                password = login?.password.orEmpty(),
+                routing = line.coreRouting,
+                verboseLogs = line.verboseLogs,
+                login = login,
+            )
+        )
+        if (!waitForCoreSocks(frontPort) { singBoxCore.isRunning() && xrayCore.isRunning() }) {
+            error("rebalanced sing-box front not ready on $frontPort")
+        }
+        desktopBalancedRooms = activeRooms
+        activeCorePort = frontPort
+        return true
+    }
+
     private fun allocateBondPort(): Int = java.net.ServerSocket().use { socket ->
         socket.reuseAddress = false
         socket.bind(java.net.InetSocketAddress("127.0.0.1", 0))
@@ -1780,6 +1867,8 @@ class DesktopVpnManager private constructor(
     private fun stopDesktopBond() {
         val bond = desktopOlcRtcBond
         desktopOlcRtcBond = null
+        desktopBalancedRooms = emptyList()
+        _bondRooms.value = null
         if (bond != null) {
             runCatching { bond.stop() }.onFailure { addLog("Desktop olcRTC bond stop failed: ${it.message}") }
             bond.deleteConfigs()
@@ -2629,10 +2718,49 @@ class DesktopVpnManager private constructor(
         coreWatchJob = null
         val coresAlive = line.coresAlive ?: return
         coreWatchJob = scope.launch {
+            val refreshPending = AtomicBoolean(false)
             while (isActive) {
                 delay(CORE_WATCH_INTERVAL_MS)
                 if (requestGeneration != generation || sessionLine !== line) return@launch
-                if (coresAlive()) continue
+                val bond = desktopOlcRtcBond
+                val decision = desktopBondWatchDecision(
+                    coresAlive = coresAlive(),
+                    activeRooms = bond?.activeIndexes(),
+                    balancedRooms = desktopBalancedRooms,
+                )
+                if (decision == DesktopBondWatchDecision.Continue || refreshPending.get()) continue
+
+                if (decision == DesktopBondWatchDecision.Refresh) {
+                    refreshPending.set(true)
+                    scope.launch {
+                        try {
+                            mutex.withLock {
+                                if (requestGeneration != generation || sessionLine !== line) return@withLock
+                                val refresh = runCatching { refreshDesktopBond(line) }
+                                val afterRefresh = desktopBondWatchDecisionAfterRefresh(refresh, coresAlive())
+                                if (afterRefresh == DesktopBondWatchDecision.Continue) return@withLock
+
+                                val refreshError = refresh.exceptionOrNull()
+                                val exitCode = singBoxCore.exitCodeOrNull() ?: xrayCore.exitCodeOrNull()
+                                handleUnexpectedProcessExit(
+                                    which = DeadProcess.Core,
+                                    logMessage = refreshError?.let { "bonded olcRTC refresh failed: ${it.message ?: it}" }
+                                        ?: if (refresh.getOrDefault(false)) {
+                                            "core process exited unexpectedly" + (exitCode?.let { " with code $it" } ?: "")
+                                        } else {
+                                            "fewer than three bonded olcRTC rooms are ready"
+                                        },
+                                    errorMessage = refreshError?.message
+                                        ?: if (refresh.getOrDefault(false)) "the core exited unexpectedly" else "fewer than three bonded rooms are ready",
+                                    requestGeneration = requestGeneration
+                                )
+                            }
+                        } finally {
+                            refreshPending.set(false)
+                        }
+                    }
+                    continue
+                }
 
                 // In a coroutine of its own, as the other watchers do it: the
                 // restart this begins cancels this job.
@@ -3215,7 +3343,9 @@ class DesktopVpnManager private constructor(
      */
     private suspend fun startDeadProcesses(line: SessionLine, requestGeneration: Long): Boolean {
         try {
-            if (line.isOlcrtc && !isOlcRtcTransportAlive()) {
+            if (line.isOlcrtc && desktopOlcRtcBond != null) {
+                if (!refreshDesktopBond(line)) return false
+            } else if (line.isOlcrtc && !isOlcRtcTransportAlive()) {
                 requireNoListener(line.socksSettings.port)
                 startLineEngine(line, requestGeneration)
                 if (requestGeneration != generation) return false

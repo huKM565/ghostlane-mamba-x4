@@ -4,6 +4,33 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
+enum class DesktopBondWatchDecision {
+    Continue,
+    Refresh,
+    Restart,
+}
+
+fun desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>): Boolean =
+    active != balanced || active.size < 4
+
+fun desktopBondWatchDecision(
+    coresAlive: Boolean,
+    activeRooms: List<Int>?,
+    balancedRooms: List<Int>,
+): DesktopBondWatchDecision {
+    if (activeRooms == null) return if (coresAlive) DesktopBondWatchDecision.Continue else DesktopBondWatchDecision.Restart
+    if (desktopBondNeedsRefresh(activeRooms, balancedRooms)) return DesktopBondWatchDecision.Refresh
+    return if (coresAlive) DesktopBondWatchDecision.Continue else DesktopBondWatchDecision.Restart
+}
+
+fun desktopBondWatchDecisionAfterRefresh(
+    refresh: Result<Boolean>,
+    coresAlive: Boolean,
+): DesktopBondWatchDecision = when {
+    refresh.isSuccess && refresh.getOrThrow() && coresAlive -> DesktopBondWatchDecision.Continue
+    else -> DesktopBondWatchDecision.Restart
+}
+
 class DesktopOlcRtcBond(
     val rooms: List<Room>,
 ) {
@@ -13,12 +40,26 @@ class DesktopOlcRtcBond(
     }
 
     data class Room(
-        val process: Process,
+        var process: Process,
         val configPath: Path,
         val port: Int,
+        val restart: (() -> Process)? = null,
     )
 
-    fun isRunning(): Boolean = rooms.all { it.process.isAlive }
+    fun activeIndexes(): List<Int> = rooms.mapIndexedNotNull { index, room ->
+        index.takeIf { room.process.isAlive }
+    }
+
+    fun recover(): List<Int> {
+        rooms.forEach { room ->
+            if (room.process.isAlive) return@forEach
+            runCatching { room.restart?.invoke() }
+                .onSuccess { process -> if (process != null) room.process = process }
+        }
+        return activeIndexes()
+    }
+
+    fun isRunning(): Boolean = activeIndexes().size >= 3
 
     fun stop() {
         var firstError: Throwable? = null
@@ -44,5 +85,5 @@ class DesktopOlcRtcBond(
         }
     }
 
-    fun ports(): List<Int> = rooms.map { it.port }
+    fun ports(): List<Int> = rooms.filter { it.process.isAlive }.map { it.port }
 }

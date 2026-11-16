@@ -19,8 +19,9 @@ class OlcRtcBondTest {
         val runtimes = fakes(4, events)
         val bond = OlcRtcBond(runtimes)
 
-        bond.start(12000)
+        val active = bond.start(12000)
 
+        assertEquals(listOf(0, 1, 2, 3), active)
         assertEquals(
             (1..4).flatMap { listOf("start-$it", "ready-$it-12000") },
             events,
@@ -29,17 +30,58 @@ class OlcRtcBondTest {
     }
 
     @Test
-    fun partialStartFailureStopsEveryRuntimeAndKeepsTheOriginalError() {
-        val events = mutableListOf<String>()
-        val runtimes = fakes(4, events)
+    fun oneFailedRoomLeavesThreeRunningAndExcludesItsIndex() {
+        val runtimes = fakes(4)
+        runtimes[2].failReady = true
+        val bond = OlcRtcBond(runtimes)
+
+        val active = bond.start(12000)
+
+        assertEquals(listOf(0, 1, 3), active)
+        assertEquals(listOf(true, true, false, true), runtimes.map { it.running })
+        assertEquals(1, runtimes[2].stopCalls)
+        assertTrue(bond.isRunning())
+    }
+
+    @Test
+    fun twoFailedRoomsStopTheWholePool() {
+        val runtimes = fakes(4)
+        runtimes[1].failReady = true
         runtimes[2].failReady = true
         val bond = OlcRtcBond(runtimes)
 
         val error = assertFailsWith<IllegalStateException> { bond.start(12000) }
 
         assertEquals("ready-3", error.message)
-        assertEquals(List(4) { 1 }, runtimes.map { it.stopCalls })
         assertTrue(runtimes.none { it.running })
+        assertFalse(bond.isRunning())
+    }
+
+    @Test
+    fun recoverReturnsAnExcludedRoomToThePool() {
+        val runtimes = fakes(4)
+        runtimes[2].failReady = true
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+        runtimes[2].failReady = false
+
+        val active = bond.recover(12000)
+
+        assertEquals(listOf(0, 1, 2, 3), active)
+        assertEquals(listOf(true, true, true, true), runtimes.map { it.running })
+    }
+
+    @Test
+    fun oneStoppedRuntimeIsExcludedWithoutKillingThePool() {
+        val runtimes = fakes(4)
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+
+        runtimes[3].running = false
+
+        assertEquals(listOf(0, 1, 2), bond.activeIndexes())
+        assertTrue(bond.isRunning())
+        assertFalse(bond.needsFullRecovery())
     }
 
     @Test
@@ -69,11 +111,12 @@ class OlcRtcBondTest {
     }
 
     @Test
-    fun oneStoppedRuntimeMakesTheWholeBondNotRunning() {
+    fun twoStoppedRuntimesMakeTheWholeBondNotRunning() {
         val runtimes = fakes(4)
         runtimes.forEach { it.running = true }
         val bond = OlcRtcBond(runtimes)
 
+        runtimes[2].running = false
         runtimes[3].running = false
 
         assertFalse(bond.isRunning())
