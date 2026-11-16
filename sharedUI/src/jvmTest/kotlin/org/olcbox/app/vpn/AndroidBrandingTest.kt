@@ -17,4 +17,10 @@ class AndroidBrandingTest {
         assertTrue("android:label=\"ИлюхаLine\"" in manifest)
         assertTrue("<string name=\"qs_tile_label\">ИлюхаLine</string>" in strings)
     }
+
+    @Test
+    fun androidForkDoesNotOfferGhostlaneUpdates() {
+        val store = File("../androidApp/src/main/res/values/store.xml").readText()
+        assertTrue("<bool name=\"store_self_update\">false</bool>" in store)
+    }
 }

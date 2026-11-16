@@ -45,9 +45,8 @@ class AppActivity : ComponentActivity() {
         val locationsRepository = AndroidLocations.repository(this)
         val configImporter = AndroidConfigImporter(this)
         val logExporter = AndroidLogExporter(this)
-        // Null where the store owns updates (the `play` flavor): the screen then
-        // neither polls the release feed nor shows the Updates section, and the
-        // manifest of that flavor carries no REQUEST_INSTALL_PACKAGES to use.
+        // Null where self-updates are disabled: the screen neither polls the
+        // release feed nor shows the Updates section.
         val updateService = if (resources.getBoolean(R.bool.store_self_update)) {
             AppUpdateService()
         } else {

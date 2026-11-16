@@ -337,7 +337,6 @@ private fun runDesktopApplication(args: Array<String>) = application {
         if (safeProxySettings != savedProxySettings) {
             dependencies.socksProxySettingsStore.save(safeProxySettings)
         }
-        checkUpdate(manual = false)
         if (WINDOWS_ELEVATED_START_ARGUMENT in args) {
             dependencies.homeViewModel.loadCurrentConfig {
                 dependencies.homeViewModel.ToggleVpn()
@@ -547,6 +546,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
                 if (showDesktopSettings) {
                     ApplicationSettingsSheet(
                         onReplayOnboarding = { dependencies.homeViewModel.replayOnboarding() },
+                        showUpdates = false,
                         updateSettings = updateSettings,
                         updateStatusText = updateMessage,
                         updateDownloadProgress = updateProgress,

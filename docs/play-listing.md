@@ -97,8 +97,8 @@ looks:
   no permission; only its `getInstalledApplications` fallback shrinks without
   it.
 
-So `androidApp` has a `store` flavor dimension: **`github`** (the APKs on the
-releases page, unchanged) and **`play`**:
+So `androidApp` has a `store` flavor dimension: **`github`** and **`play`**.
+IlyukhaLine disables self-updates from the upstream Ghostlane feed on both.
 
 - `androidApp/src/play/AndroidManifest.xml` removes both permissions with
   `tools:node="remove"`.

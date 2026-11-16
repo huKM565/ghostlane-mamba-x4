@@ -83,13 +83,10 @@ android {
         }
     }
 
-    // One app, two channels. `github` is the build on the releases page and
-    // updates itself from there, which is what REQUEST_INSTALL_PACKAGES is
-    // for. `play` is the bundle Google Play distributes: Play owns updates and
-    // refuses that permission — and QUERY_ALL_PACKAGES — at upload, before a
-    // human looks (Device and Network Abuse; package visibility). Both are
-    // removed in src/play/AndroidManifest.xml, and src/play/res overrides the
-    // store_self_update bool so AppActivity builds no updater. Same
+    // One app, two channels. Self-updates from the upstream release feed are
+    // disabled in both. `play` is the bundle Google Play distributes: Play owns
+    // updates and refuses REQUEST_INSTALL_PACKAGES and QUERY_ALL_PACKAGES at
+    // upload. Both are removed in src/play/AndroidManifest.xml. Same
     // applicationId, version code and signing key on both, so a phone can move
     // between them and update. (Plain res files rather than resValue: AGP 9
     // ships with buildFeatures.resValues off.)

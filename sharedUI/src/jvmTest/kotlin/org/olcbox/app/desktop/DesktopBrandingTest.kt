@@ -20,6 +20,14 @@ class DesktopBrandingTest {
     }
 
     @Test
+    fun desktopForkDoesNotOfferGhostlaneUpdates() {
+        val main = File("../desktopApp/src/main/kotlin/main.kt").readText()
+        val startup = main.substringAfter("LaunchedEffect(Unit) {").substringBefore("LaunchedEffect(showDesktopSettings)")
+        assertTrue("checkUpdate(manual = false)" !in startup)
+        assertTrue("showUpdates = false" in main.substringAfter("ApplicationSettingsSheet("))
+    }
+
+    @Test
     fun windowsDataDoesNotShareTheGhostlaneDirectory() {
         val oldOs = System.getProperty("os.name")
         val oldHome = System.getProperty("user.home")
