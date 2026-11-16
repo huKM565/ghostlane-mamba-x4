@@ -1,30 +1,230 @@
 diff --git a/internal/client/client.go b/internal/client/client.go
-index 51fedb70..890ccf1e 100644
+index 51fedb70..ff31de10 100644
 --- a/internal/client/client.go
 +++ b/internal/client/client.go
-@@ -258,6 +258,9 @@ type Config struct {
+@@ -145,6 +145,8 @@ type Client struct {
+ 	// onSessionOpen hears each session id as the session is established;
+ 	// see Config.OnSessionOpen.
+ 	onSessionOpen SessionOpenFunc
++	// ai-generated: room entry and relay state callback.
++	onRoomState func(RoomState)
+ 
+ 	// endOnEmptyRoom ends the run instead of retrying in a room nobody is
+ 	// in; see Config.EndOnEmptyRoom.
+@@ -258,6 +260,12 @@ type Config struct {
  	// established: on the initial connect and after every reconnect. A host
  	// that cannot read the log learns of a room handover this way.
  	OnSessionOpen SessionOpenFunc
++	// OnRoomState distinguishes entering the provider room from establishing the relay session.
++	// ai-generated: the room state callback.
++	OnRoomState func(RoomState)
 +	// OnOccupancy reports the current number of room participants when the provider knows it.
 +	// ai-generated: the room occupancy callback.
 +	OnOccupancy func(participants int)
  	// EndOnEmptyRoom makes Run return once a reconnect handshake fails with
  	// nothing in the room having sent a frame while it ran - the shape of a
  	// room whose server has been retired. Set it when something above the
+@@ -303,7 +311,7 @@ func RunWithAddress(ctx context.Context, cfg Config, onReady func(actualAddr str
+ 		udpFlows: make(map[uint64]clientUDPFlow), udpFlowIndex: make(map[clientUDPFlowKey]uint64),
+ 		udpDisabled: cfg.UDPDisabled, maxUDPFlows: normalizeMaxUDPFlows(cfg.UDPMaxFlows),
+ 		rules: cfg.Direct, dialer: protect.NewDialer(cfg.Resolver),
+-		onSessionOpen: cfg.OnSessionOpen, endOnEmptyRoom: cfg.EndOnEmptyRoom,
++		onSessionOpen: cfg.OnSessionOpen, onRoomState: cfg.OnRoomState, endOnEmptyRoom: cfg.EndOnEmptyRoom,
+ 	}
+ 	if exchanger, ok := cfg.Resolver.(protect.Exchanger); ok {
+ 		client.exchanger = exchanger
 diff --git a/internal/client/link.go b/internal/client/link.go
-index 95a55d88..2ea85a25 100644
+index 95a55d88..e638692c 100644
 --- a/internal/client/link.go
 +++ b/internal/client/link.go
-@@ -845,7 +845,7 @@ func (c *Client) sessionSnapshot() (*smux.Session, string, <-chan struct{}) {
+@@ -60,6 +60,7 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
+ 	}, c.linkRole(cfg))
+ 	link, err := transport.New(ctx, cfg.Transport, linkCfg)
+ 	if err != nil {
++		c.notifyRoomState(RoomJoinFailed)
+ 		return fmt.Errorf("failed to create link: %w", err)
+ 	}
+ 	c.ln = link
+@@ -74,8 +75,10 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
+ 		}
+ 	})
+ 	if connectErr := link.Connect(ctx); connectErr != nil {
++		c.notifyRoomState(RoomJoinFailed)
+ 		return fmt.Errorf("failed to connect link: %w", connectErr)
+ 	}
++	c.notifyRoomState(RoomJoined)
+ 	// ai-generated: moved this call earlier in the function (was after the
+ 	// handshake block below) and added this comment explaining why.
+ 	// Start watching for reconnect requests now, not after the handshake
+@@ -97,6 +100,7 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
+ 		link, conn, controlConn, tunnelcore.ClientRole,
+ 	)
+ 	if err != nil {
++		c.notifyRoomState(RelayFailed)
+ 		if pair != nil {
+ 			_ = pair.Close()
+ 		}
+@@ -105,14 +109,17 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
+ 	control, sessionID, peerID, err := openControlStream(ctx, pair.ControlSession, c.deviceID, c.claims)
+ 	if err != nil {
+ 		err = c.classifyHandshakeFailure(err, conn, controlConn)
++		c.notifyRoomState(RelayFailed)
+ 		_ = pair.Close()
+ 		return fmt.Errorf("handshake: %w", err)
+ 	}
+ 	if err := confirmPeer(link, peerID); err != nil {
++		c.notifyRoomState(RelayFailed)
+ 		_ = pair.Close()
+ 		return err
+ 	}
+ 	if waitErr := waitForPeer(ctx, link); waitErr != nil {
++		c.notifyRoomState(RelayFailed)
+ 		_ = pair.Close()
+ 		return waitErr
+ 	}
+@@ -796,6 +803,7 @@ func (c *Client) helloTimeout() time.Duration {
+ // notifySessionOpen reports an established session to the host when it asked
+ // to hear about them. The initial connect and every reconnect land here.
+ func (c *Client) notifySessionOpen(sessionID string) {
++	c.notifyRoomState(RelayReady)
+ 	if c.onSessionOpen != nil {
+ 		c.onSessionOpen(sessionID)
+ 	}
+@@ -845,7 +853,8 @@ func (c *Client) sessionSnapshot() (*smux.Session, string, <-chan struct{}) {
  // ai-generated: this function and its DefaultICE.
  func (c *Client) linkRole(cfg Config) tunnelcore.LinkRoleConfig {
  	return tunnelcore.LinkRoleConfig{
 -		DeviceID: c.deviceID, OnData: c.onData, OnDatagram: c.onDatagram, Resolver: cfg.Resolver,
-+		DeviceID: c.deviceID, OnData: c.onData, OnDatagram: c.onDatagram, OnOccupancy: cfg.OnOccupancy, Resolver: cfg.Resolver,
++		DeviceID: c.deviceID, OnData: c.onData, OnDatagram: c.onDatagram,
++		OnOccupancy: cfg.OnOccupancy, Resolver: cfg.Resolver,
  		RequireTargetedPeer: true,
  		DefaultICE:          roomhint.ICETCP,
  	}
+diff --git a/internal/client/room_state.go b/internal/client/room_state.go
+new file mode 100644
+index 00000000..70c8a814
+--- /dev/null
++++ b/internal/client/room_state.go
+@@ -0,0 +1,23 @@
++package client
++
++import "github.com/openlibrecommunity/olcrtc/internal/logger"
++
++// RoomState describes room entry and relay session establishment separately.
++// ai-generated: the room state API and values.
++type RoomState string
++
++const (
++	RoomJoined     RoomState = "joined"
++	RoomJoinFailed RoomState = "join-failed"
++	RelayReady     RoomState = "relay-ready"
++	RelayFailed    RoomState = "relay-failed"
++)
++
++// notifyRoomState reports a state without exposing the room or key in the log.
++// ai-generated: structured room state notification.
++func (c *Client) notifyRoomState(state RoomState) {
++	logger.Infof("client: room state=%s", state)
++	if c.onRoomState != nil {
++		c.onRoomState(state)
++	}
++}
+diff --git a/internal/client/session_open_test.go b/internal/client/session_open_test.go
+index 459463e0..694c5c51 100644
+--- a/internal/client/session_open_test.go
++++ b/internal/client/session_open_test.go
+@@ -3,6 +3,8 @@ package client
+ 
+ import (
+ 	"context"
++	"errors"
++	"reflect"
+ 	"sync"
+ 	"testing"
+ 	"time"
+@@ -37,6 +39,7 @@ func TestOnSessionOpenReportsTheEstablishedSession(t *testing.T) {
+ 
+ 	var mu sync.Mutex
+ 	var opened []string
++	var states []RoomState
+ 	address := make(chan string, 1)
+ 	clientErr := make(chan error, 1)
+ 	go func() {
+@@ -48,18 +51,74 @@ func TestOnSessionOpenReportsTheEstablishedSession(t *testing.T) {
+ 				opened = append(opened, sessionID)
+ 				mu.Unlock()
+ 			},
++			OnRoomState: func(state RoomState) {
++				mu.Lock()
++				states = append(states, state)
++				mu.Unlock()
++			},
+ 		}, func(actualAddr string) { address <- actualAddr })
+ 	}()
+ 	waitListenerAddress(t, address, clientErr, serverErr)
+ 
+ 	mu.Lock()
+ 	got := append([]string(nil), opened...)
++	gotStates := append([]RoomState(nil), states...)
+ 	mu.Unlock()
+ 	if len(got) != 1 || got[0] == "" {
+ 		t.Fatalf("session-open calls = %q, want exactly one carrying the session id", got)
+ 	}
++	if want := []RoomState{RoomJoined, RelayReady}; !reflect.DeepEqual(gotStates, want) {
++		t.Fatalf("room states = %v, want %v", gotStates, want)
++	}
+ 
+ 	cancel()
+ 	waitListenerRun(t, "client", clientErr)
+ 	waitListenerRun(t, "server", serverErr)
+ }
++
++// ai-generated: a provider refusal is distinct from a joined room without a relay handshake.
++func TestRoomStateReportsJoinFailure(t *testing.T) {
++	transport.Register("datachannel", datachannel.New)
++	providerName := "listener-test-" + t.Name()
++	enginebuiltin.Register(providerName, func(_ context.Context, _ enginebuiltin.Config) (engine.Session, error) {
++		return nil, errors.New("provider join refused")
++	})
++	var states []RoomState
++
++	err := Run(context.Background(), Config{
++		Transport: "datachannel", Provider: providerName, RoomURL: "room", KeyHex: listenerTestKey,
++		LocalAddr: "127.0.0.1:0", DeviceID: "join-failure-client",
++		OnRoomState: func(state RoomState) { states = append(states, state) },
++	})
++	if err == nil {
++		t.Fatal("Run() error = nil, want provider join failure")
++	}
++	if want := []RoomState{RoomJoinFailed}; !reflect.DeepEqual(states, want) {
++		t.Fatalf("room states = %v, want %v", states, want)
++	}
++}
++
++// ai-generated: joining the room must not be mistaken for establishing the relay session.
++func TestRoomStateReportsRelayFailureAfterJoin(t *testing.T) {
++	transport.Register("datachannel", datachannel.New)
++	room := &listenerTestRoom{sessions: make(map[*listenerTestSession]struct{})}
++	providerName := "listener-test-" + t.Name()
++	enginebuiltin.Register(providerName, func(_ context.Context, cfg enginebuiltin.Config) (engine.Session, error) {
++		return room.newSession(cfg.OnData), nil
++	})
++	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++	defer cancel()
++	var states []RoomState
++
++	err := Run(ctx, Config{
++		Transport: "datachannel", Provider: providerName, RoomURL: "room", KeyHex: listenerTestKey,
++		LocalAddr: "127.0.0.1:0", DeviceID: "relay-failure-client",
++		OnRoomState: func(state RoomState) { states = append(states, state) },
++	})
++	if err == nil {
++		t.Fatal("Run() error = nil, want handshake failure")
++	}
++	if want := []RoomState{RoomJoined, RelayFailed}; !reflect.DeepEqual(states, want) {
++		t.Fatalf("room states = %v, want %v", states, want)
++	}
++}
 diff --git a/internal/engine/builtin/builtin.go b/internal/engine/builtin/builtin.go
 index 09cf37b9..36137df0 100644
 --- a/internal/engine/builtin/builtin.go
@@ -52,7 +252,7 @@ index e82ff063..5a76524c 100644
 @@ -21,6 +21,14 @@ func TestEngineConfigCarriesTheICELocalIP(t *testing.T) {
  	}
  }
-
+ 
 +// ai-generated: the room occupancy callback crosses the provider config.
 +func TestEngineConfigCarriesTheOccupancyCallback(t *testing.T) {
 +	got := engineConfig(Config{OnOccupancy: func(int) {}}, engine.Credentials{URL: "u"}, nil)
@@ -83,7 +283,7 @@ index a9280478..c6fc5aec 100644
 --- a/internal/engine/jitsi/jitsi.go
 +++ b/internal/engine/jitsi/jitsi.go
 @@ -76,6 +76,7 @@ type Session struct {
-
+ 
  	onData              func([]byte)
  	onPeerData          func(peerID string, data []byte)
 +	occupancy           occupancyReporter // ai-generated: MUC roster reporting.
@@ -101,7 +301,7 @@ index a9280478..c6fc5aec 100644
 @@ -266,6 +268,8 @@ func (s *Session) Connect(ctx context.Context) error {
  	s.setJSession(jSess)
  	logger.Infof("jitsi: MUC joined %s/%s; waiting for peer …", s.host, s.room)
-
+ 
 +	s.reportOccupancy()
 +	s.goLaunch(s.watchOccupancy)
  	s.goLaunch(s.sendLoop)
@@ -305,10 +505,10 @@ index f0dedd1a..161d658a 100644
  	}
  	if cfg.Provider != "provider" || cfg.RoomURL != "room" || cfg.Traffic.MaxPayloadSize != 4096 {
 diff --git a/mobile/listener.go b/mobile/listener.go
-index 82ac7ecd..1856bbb5 100644
+index 82ac7ecd..630b0a12 100644
 --- a/mobile/listener.go
 +++ b/mobile/listener.go
-@@ -42,3 +42,52 @@ func (r *Runtime) notifySessionOpened(gen *runGeneration, room, sessionID string
+@@ -42,3 +42,98 @@ func (r *Runtime) notifySessionOpened(gen *runGeneration, room, sessionID string
  	}
  	listener.OnSessionOpened(room, sessionID)
  }
@@ -361,8 +561,54 @@ index 82ac7ecd..1856bbb5 100644
 +		listener.OnRoomOccupancyChanged(room, participants)
 +	}
 +}
++
++// RoomStateListener receives provider room entry and relay establishment events.
++// ai-generated: room state listener, current-generation cache and replay.
++type RoomStateListener interface {
++	OnRoomStateChanged(room string, state string)
++}
++
++// SetRoomStateListener installs a listener and replays the latest state of the current generation.
++func (r *Runtime) SetRoomStateListener(l RoomStateListener) {
++	r.mu.Lock()
++	r.roomStateListener = l
++	r.mu.Unlock()
++	r.RequestRoomState()
++}
++
++func (r *Runtime) notifyRoomState(gen *runGeneration, room, state string) {
++	r.mu.Lock()
++	listener := r.roomStateListener
++	live := r.isCurrentGenerationLocked(gen) && !gen.stopRequested
++	if live {
++		gen.roomStateRoom = room
++		gen.roomState = state
++		gen.roomStateKnown = true
++	}
++	r.mu.Unlock()
++	if listener != nil && live {
++		listener.OnRoomStateChanged(room, state)
++	}
++}
++
++// RequestRoomState replays only the latest state of the current live generation.
++func (r *Runtime) RequestRoomState() {
++	r.mu.Lock()
++	gen := r.current
++	if gen == nil || !r.isCurrentGenerationLocked(gen) || gen.stopRequested || !gen.roomStateKnown {
++		r.mu.Unlock()
++		return
++	}
++	listener := r.roomStateListener
++	room := gen.roomStateRoom
++	state := gen.roomState
++	r.mu.Unlock()
++	if listener != nil {
++		listener.OnRoomStateChanged(room, state)
++	}
++}
 diff --git a/mobile/listener_test.go b/mobile/listener_test.go
-index a177744d..d0cbb57a 100644
+index a177744d..0daeb1cd 100644
 --- a/mobile/listener_test.go
 +++ b/mobile/listener_test.go
 @@ -4,6 +4,7 @@ package mobile
@@ -373,10 +619,56 @@ index a177744d..d0cbb57a 100644
  	"reflect"
  	"sync"
  	"testing"
-@@ -112,6 +113,76 @@ func TestSessionListenerIgnoresAStoppingGeneration(t *testing.T) {
+@@ -112,6 +113,122 @@ func TestSessionListenerIgnoresAStoppingGeneration(t *testing.T) {
  	}
  }
-
+ 
++// ai-generated: replay of the latest room state when the host installs its listener late.
++func TestRoomStateListenerReplaysLatestStateOnActivation(t *testing.T) {
++	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
++		cfg.OnRoomState(client.RoomJoined)
++		cfg.OnRoomState(client.RelayReady)
++		onReady("127.0.0.1:1080")
++		<-ctx.Done()
++		return ctx.Err()
++	})
++	if err := runtime.Start(); err != nil {
++		t.Fatalf("Start() error = %v", err)
++	}
++	if err := runtime.WaitReady(2000); err != nil {
++		t.Fatalf("WaitReady() error = %v", err)
++	}
++	listener := &recordingRoomStateListener{}
++	runtime.SetRoomStateListener(listener)
++	if got, want := listener.events(), []string{testRoom + " relay-ready"}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("room states after listener activation = %v, want %v", got, want)
++	}
++	runtime.RequestRoomState()
++	if got, want := listener.events(), []string{testRoom + " relay-ready", testRoom + " relay-ready"}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("room states after replay = %v, want %v", got, want)
++	}
++	if err := runtime.Stop(100); err != nil {
++		t.Fatalf("Stop() error = %v", err)
++	}
++}
++
++type recordingRoomStateListener struct {
++	mu     sync.Mutex
++	states []string
++}
++
++func (l *recordingRoomStateListener) OnRoomStateChanged(room, state string) {
++	l.mu.Lock()
++	l.states = append(l.states, room+" "+state)
++	l.mu.Unlock()
++}
++
++func (l *recordingRoomStateListener) events() []string {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	return append([]string(nil), l.states...)
++}
++
 +// ai-generated: the host receives roster counts without parsing engine logs.
 +func TestOccupancyListenerReceivesRoomCounts(t *testing.T) {
 +	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
@@ -451,12 +743,12 @@ index a177744d..d0cbb57a 100644
  	mu     sync.Mutex
  	opened []string
 diff --git a/mobile/runtime.go b/mobile/runtime.go
-index d0854997..ecc7efc4 100644
+index d0854997..89b7bc4a 100644
 --- a/mobile/runtime.go
 +++ b/mobile/runtime.go
-@@ -48,15 +48,18 @@ type runtimeState string
+@@ -48,15 +48,21 @@ type runtimeState string
  type clientRunner func(context.Context, client.Config, func(string)) error
-
+ 
  type runGeneration struct {
 -	id            uint64
 -	cfg           client.Config
@@ -479,46 +771,76 @@ index d0854997..ecc7efc4 100644
 +	occupancyRoom         string
 +	occupancyParticipants int
 +	occupancyKnown        bool
++	roomStateRoom         string
++	roomState             string
++	roomStateKnown        bool
  }
-
+ 
  // Runtime owns one independently configured mobile client lifecycle.
-@@ -69,6 +72,9 @@ type Runtime struct {
+@@ -69,6 +75,11 @@ type Runtime struct {
  	runner         clientRunner
  	// listener hears each session open; see SetSessionListener.
  	listener SessionListener
 +	// occupancyListener hears MUC roster changes; see SetOccupancyListener.
 +	// ai-generated: the room occupancy listener.
 +	occupancyListener OccupancyListener
++	// ai-generated: the room entry and relay state listener.
++	roomStateListener RoomStateListener
  }
-
+ 
  // New returns an idle Runtime with documented mobile defaults.
-@@ -165,6 +171,7 @@ func (r *Runtime) run(ctx context.Context, gen *runGeneration) {
+@@ -165,6 +176,8 @@ func (r *Runtime) run(ctx context.Context, gen *runGeneration) {
  		cfg := gen.cfg
  		cfg.RoomURL = profile.RoomID
  		cfg.OnSessionOpen = func(sessionID string) { r.notifySessionOpened(gen, profile.RoomID, sessionID) }
++		cfg.OnRoomState = func(state client.RoomState) { r.notifyRoomState(gen, profile.RoomID, string(state)) }
 +		cfg.OnOccupancy = func(participants int) { r.notifyRoomOccupancy(gen, profile.RoomID, participants) }
  		// A room nobody is in ends this run so the next one is tried, but
  		// only while there is a next one: with a single room, giving up
  		// would end the generation and leave the host holding a tunnel it
 diff --git a/pkg/olcrtc/client/client.go b/pkg/olcrtc/client/client.go
-index eef8af7e..4b555b0f 100644
+index eef8af7e..3e046588 100644
 --- a/pkg/olcrtc/client/client.go
 +++ b/pkg/olcrtc/client/client.go
-@@ -121,6 +121,9 @@ type Config struct {
+@@ -121,6 +121,12 @@ type Config struct {
  	// established; a host that cannot read the log learns of a room
  	// handover this way.
  	OnSessionOpen SessionOpenFunc
++	// OnRoomState distinguishes entering the provider room from establishing the relay session.
++	// ai-generated: the room state callback.
++	OnRoomState func(RoomState)
 +	// OnOccupancy reports the current number of room participants when the provider knows it.
 +	// ai-generated: the room occupancy callback.
 +	OnOccupancy func(participants int)
  	// EndOnEmptyRoom ends the run when a reconnect handshake finds the room
  	// empty, instead of retrying in it for as long as the tunnel lives. Set
  	// it only when the caller has another room to try.
-@@ -186,6 +189,7 @@ func toClientConfig(cfg Config) internalclient.Config {
+@@ -186,6 +192,8 @@ func toClientConfig(cfg Config) internalclient.Config {
  		DeviceID: cfg.DeviceID, DeviceIDPath: cfg.DeviceIDPath, Claims: cfg.Claims,
  		OnHealth:       internalclient.HealthFunc(cfg.OnHealth),
  		OnSessionOpen:  internalclient.SessionOpenFunc(cfg.OnSessionOpen),
++		OnRoomState:    cfg.OnRoomState,
 +		OnOccupancy:    cfg.OnOccupancy,
  		EndOnEmptyRoom: cfg.EndOnEmptyRoom,
  		UDPDisabled:    cfg.UDPDisabled, UDPMaxFlows: cfg.UDPMaxFlows,
  	}
+diff --git a/pkg/olcrtc/client/room_state.go b/pkg/olcrtc/client/room_state.go
+new file mode 100644
+index 00000000..54f0c87d
+--- /dev/null
++++ b/pkg/olcrtc/client/room_state.go
+@@ -0,0 +1,14 @@
++package client
++
++import internalclient "github.com/openlibrecommunity/olcrtc/internal/client"
++
++// RoomState describes room entry and relay session establishment separately.
++// ai-generated: public aliases for the internal room state API.
++type RoomState = internalclient.RoomState
++
++const (
++	RoomJoined     = internalclient.RoomJoined
++	RoomJoinFailed = internalclient.RoomJoinFailed
++	RelayReady     = internalclient.RelayReady
++	RelayFailed    = internalclient.RelayFailed
++)
