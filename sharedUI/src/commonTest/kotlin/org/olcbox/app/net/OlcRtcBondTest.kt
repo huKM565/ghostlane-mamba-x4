@@ -8,9 +8,12 @@ import kotlin.test.assertTrue
 
 class OlcRtcBondTest {
     @Test
-    fun bondRequiresExactlyFourRuntimes() {
+    fun bondRequiresExactlyFourOrTwelveRuntimes() {
         assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(3)) }
         assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(5)) }
+        assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(13)) }
+        OlcRtcBond(fakes(4))
+        OlcRtcBond(fakes(12))
     }
 
     @Test
@@ -24,6 +27,47 @@ class OlcRtcBondTest {
         assertEquals(listOf(0), active)
         assertEquals(listOf("start-1", "start-2", "start-3", "start-4", "ready-1-12000"), events)
         assertTrue(bond.isRunning())
+    }
+
+    @Test
+    fun twelveRuntimeStartLaunchesEverythingAndReturnsAtTheFirstReadyRoom() {
+        val events = mutableListOf<String>()
+        val runtimes = fakes(12, events)
+        val bond = OlcRtcBond(runtimes)
+
+        val active = bond.start(12000)
+
+        assertEquals(listOf(0), active)
+        assertEquals((1..12).map { "start-$it" } + "ready-1-12000", events)
+    }
+
+    @Test
+    fun twelveRuntimeRecoveryRestoresEveryRoom() {
+        val runtimes = fakes(12)
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+
+        val active = bond.recover(12000)
+
+        assertEquals((0..11).toList(), active)
+        assertEquals(List(12) { true }, runtimes.map { it.running })
+    }
+
+    @Test
+    fun twelveRuntimeBondStaysUpUntilTheLastRoomStops() {
+        val runtimes = fakes(12)
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+        bond.recover(12000)
+
+        runtimes.drop(1).forEach { it.running = false }
+        assertEquals(listOf(0), bond.activeIndexes())
+        assertTrue(bond.isRunning())
+        assertFalse(bond.needsFullRecovery())
+
+        runtimes[0].running = false
+        assertFalse(bond.isRunning())
+        assertTrue(bond.needsFullRecovery())
     }
 
     @Test

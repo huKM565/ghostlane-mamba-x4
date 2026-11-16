@@ -13,7 +13,7 @@ class OlcRtcBond(private val runtimes: List<OlcRtcBondRuntime>) {
     private val readyIndexes = mutableSetOf<Int>()
 
     init {
-        require(runtimes.size == 4) { "an olcRTC bond requires exactly four runtimes" }
+        require(runtimes.size == 4 || runtimes.size == 12) { "an olcRTC bond requires exactly four or twelve runtimes" }
     }
 
     fun start(timeoutMillis: Int): List<Int> {
