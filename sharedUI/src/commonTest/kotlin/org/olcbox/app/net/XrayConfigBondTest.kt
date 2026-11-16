@@ -103,9 +103,18 @@ class XrayConfigBondTest {
         assertEquals(listOf(21081, 21082, 21084), ports)
     }
 
-    @Test fun vlessBondRejectsFewerThanThreeOrDuplicatePorts() {
+    @Test fun vlessBondStartsWithOneReadyRoom() {
+        val root = Json.parseToJsonElement(
+            XrayConfig.buildVlessBond(spec, listOf(21081), "u", "p")
+        ).jsonObject
+
+        val balancer = root["routing"]!!.jsonObject["balancers"]!!.jsonArray.single().jsonObject
+        assertEquals(listOf("vless-room-1"), balancer["selector"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test fun vlessBondRejectsEmptyDuplicateOrTooManyPorts() {
         val invalid = listOf(
-            listOf(21081, 21082),
+            emptyList(),
             listOf(21081, 21082, 21083, 21084, 21085),
             listOf(21081, 21082, 21082, 21084),
         )

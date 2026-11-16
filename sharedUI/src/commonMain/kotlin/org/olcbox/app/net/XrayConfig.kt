@@ -69,8 +69,8 @@ object XrayConfig {
         verboseLogs: Boolean = false,
         login: SocksLogin? = null,
     ): String {
-        require(roomPorts.size in 3..4 && roomPorts.toSet().size == roomPorts.size) {
-            "a VLESS bond requires three or four distinct room ports"
+        require(roomPorts.size in 1..4 && roomPorts.toSet().size == roomPorts.size) {
+            "a VLESS bond requires between one and four distinct room ports"
         }
         require(spec.plain && spec.transport == TransportSpec.Tcp) {
             "a VLESS room bond requires a plain TCP VLESS endpoint"

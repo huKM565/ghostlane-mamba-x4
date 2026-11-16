@@ -2001,7 +2001,7 @@ class OlcboxVpnService : VpnService() {
 
             var activeRooms = bond.activeIndexes()
             OlcboxVpnState.setBondRooms(activeRooms)
-            if (activeRooms.size < 3) return@withLock
+            if (activeRooms.isEmpty()) return@withLock
             if (activeRooms != bondBalancedRooms && !rebalanceMobileBond(location, activeRooms)) {
                 return@withLock
             }
@@ -2009,7 +2009,7 @@ class OlcboxVpnService : VpnService() {
             activeRooms = bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt())
             if (!current()) return@withLock
             OlcboxVpnState.setBondRooms(activeRooms)
-            if (activeRooms.size < 3 || activeRooms == bondBalancedRooms) return@withLock
+            if (activeRooms.isEmpty() || activeRooms == bondBalancedRooms) return@withLock
             rebalanceMobileBond(location, activeRooms)
         }
     }

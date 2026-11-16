@@ -41,7 +41,10 @@ fun desktopBondWatchDecisionAfterRefresh(
 
 class DesktopOlcRtcBond(
     val rooms: List<Room>,
+    readyIndexes: Set<Int> = rooms.indices.toSet(),
 ) {
+    private val readyIndexes = readyIndexes.toMutableSet()
+
     init {
         require(rooms.size == 4) { "a desktop olcRTC bond requires exactly four rooms" }
         require(rooms.map { it.port }.distinct().size == 4) { "bonded rooms need distinct ports" }
@@ -54,9 +57,11 @@ class DesktopOlcRtcBond(
         val restart: (() -> Process)? = null,
     )
 
-    fun activeIndexes(): List<Int> = rooms.mapIndexedNotNull { index, room ->
-        index.takeIf { room.process.isAlive }
+    fun markReady(index: Int) {
+        readyIndexes += index
     }
+
+    fun activeIndexes(): List<Int> = readyIndexes.filter { rooms[it].process.isAlive }.sorted()
 
     fun recover(): List<Int> {
         rooms.forEach { room ->
@@ -67,7 +72,7 @@ class DesktopOlcRtcBond(
         return activeIndexes()
     }
 
-    fun isRunning(): Boolean = activeIndexes().size >= 3
+    fun isRunning(): Boolean = activeIndexes().isNotEmpty()
 
     fun stop() {
         var firstError: Throwable? = null
@@ -84,6 +89,7 @@ class DesktopOlcRtcBond(
                 if (firstError == null) firstError = error
             }
         }
+        readyIndexes.clear()
         firstError?.let { throw it }
     }
 
@@ -93,5 +99,5 @@ class DesktopOlcRtcBond(
         }
     }
 
-    fun ports(): List<Int> = rooms.filter { it.process.isAlive }.map { it.port }
+    fun ports(): List<Int> = activeIndexes().map { rooms[it].port }
 }

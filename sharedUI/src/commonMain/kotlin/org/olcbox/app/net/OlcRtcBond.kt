@@ -9,43 +9,58 @@ interface OlcRtcBondRuntime {
 }
 
 class OlcRtcBond(private val runtimes: List<OlcRtcBondRuntime>) {
+    private val readyIndexes = mutableSetOf<Int>()
+
     init {
         require(runtimes.size == 4) { "an olcRTC bond requires exactly four runtimes" }
     }
 
     fun start(timeoutMillis: Int): List<Int> {
+        readyIndexes.clear()
         var lastError: Throwable? = null
         runtimes.forEachIndexed { index, runtime ->
-            try {
-                runtime.start()
-                runtime.waitReady(timeoutMillis)
-            } catch (error: Throwable) {
+            runCatching { runtime.start() }.onFailure { error ->
                 lastError = error
+                readyIndexes.remove(index)
                 runCatching { runtime.stop(timeoutMillis) }
             }
         }
-        if (activeIndexes().size < 3) {
+        runtimes.forEachIndexed { index, runtime ->
+            if (!runtime.isRunning()) return@forEachIndexed
+            try {
+                runtime.waitReady(timeoutMillis)
+                readyIndexes += index
+                return activeIndexes()
+            } catch (error: Throwable) {
+                lastError = error
+                readyIndexes.remove(index)
+                runCatching { runtime.stop(timeoutMillis) }
+            }
+        }
+        if (activeIndexes().isEmpty()) {
             runCatching { stop(timeoutMillis) }
-            throw lastError ?: IllegalStateException("fewer than three olcRTC rooms are ready")
+            throw lastError ?: IllegalStateException("no olcRTC rooms are ready")
         }
         return activeIndexes()
     }
 
     fun recover(timeoutMillis: Int): List<Int> {
-        runtimes.forEach { runtime ->
-            if (runtime.isRunning()) return@forEach
-            runCatching { runtime.stop(timeoutMillis) }
+        runtimes.forEachIndexed { index, runtime ->
+            if (index in readyIndexes && runtime.isRunning()) return@forEachIndexed
+            readyIndexes.remove(index)
+            if (!runtime.isRunning()) {
+                runCatching { runtime.stop(timeoutMillis) }
+                runCatching { runtime.start() }
+            }
             runCatching {
-                runtime.start()
                 runtime.waitReady(timeoutMillis)
+                readyIndexes += index
             }
         }
         return activeIndexes()
     }
 
-    fun activeIndexes(): List<Int> = runtimes.mapIndexedNotNull { index, runtime ->
-        index.takeIf { runtime.isRunning() }
-    }
+    fun activeIndexes(): List<Int> = readyIndexes.filter { runtimes[it].isRunning() }.sorted()
 
     fun stop(timeoutMillis: Int) {
         var firstError: Throwable? = null
@@ -56,10 +71,11 @@ class OlcRtcBond(private val runtimes: List<OlcRtcBondRuntime>) {
                 if (firstError == null) firstError = error
             }
         }
+        readyIndexes.clear()
         firstError?.let { throw it }
     }
 
-    fun needsFullRecovery(): Boolean = activeIndexes().size < 3
+    fun needsFullRecovery(): Boolean = activeIndexes().isEmpty()
 
     fun isRunning(): Boolean = !needsFullRecovery()
 

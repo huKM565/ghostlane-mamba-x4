@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 class DesktopOlcRtcBondTest {
     @Test
-    fun bondRequiresFourRoomsAndKeepsRunningWithThree() {
+    fun bondRequiresFourRoomsAndKeepsRunningUntilTheLastRoomStops() {
         val rooms = rooms(4)
         assertFailsWith<IllegalArgumentException> { DesktopOlcRtcBond(rooms(3)) }
         val bond = DesktopOlcRtcBond(rooms)
@@ -21,7 +21,19 @@ class DesktopOlcRtcBondTest {
         assertEquals(listOf(21081, 21082, 21083), bond.ports())
         assertEquals(listOf(0, 1, 2), bond.activeIndexes())
         (rooms[2].process as FakeProcess).alive = false
+        assertTrue(bond.isRunning())
+        rooms.take(2).forEach { (it.process as FakeProcess).alive = false }
         assertFalse(bond.isRunning())
+    }
+
+    @Test
+    fun onlyReadyRoomsAreActive() {
+        val bond = DesktopOlcRtcBond(rooms(4), readyIndexes = setOf(1))
+        assertEquals(listOf(1), bond.activeIndexes())
+        bond.markReady(3)
+        assertEquals(listOf(1, 3), bond.activeIndexes())
+        bond.stop()
+        assertTrue(bond.activeIndexes().isEmpty())
     }
 
     @Test

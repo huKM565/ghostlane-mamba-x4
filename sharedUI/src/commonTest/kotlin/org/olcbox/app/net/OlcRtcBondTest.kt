@@ -14,45 +14,76 @@ class OlcRtcBondTest {
     }
 
     @Test
-    fun startLaunchesAndWaitsForEveryRuntime() {
+    fun startLaunchesAllButWaitsOnlyForTheFirstReadyRuntime() {
         val events = mutableListOf<String>()
         val runtimes = fakes(4, events)
         val bond = OlcRtcBond(runtimes)
 
         val active = bond.start(12000)
 
-        assertEquals(listOf(0, 1, 2, 3), active)
-        assertEquals(
-            (1..4).flatMap { listOf("start-$it", "ready-$it-12000") },
-            events,
-        )
+        assertEquals(listOf(0), active)
+        assertEquals(listOf("start-1", "start-2", "start-3", "start-4", "ready-1-12000"), events)
         assertTrue(bond.isRunning())
     }
 
     @Test
-    fun oneFailedRoomLeavesThreeRunningAndExcludesItsIndex() {
+    fun failedRoomBeforeFirstSuccessIsStoppedAndExcluded() {
         val runtimes = fakes(4)
-        runtimes[2].failReady = true
+        runtimes[0].failReady = true
         val bond = OlcRtcBond(runtimes)
 
         val active = bond.start(12000)
 
-        assertEquals(listOf(0, 1, 3), active)
-        assertEquals(listOf(true, true, false, true), runtimes.map { it.running })
-        assertEquals(1, runtimes[2].stopCalls)
+        assertEquals(listOf(1), active)
+        assertEquals(listOf(false, true, true, true), runtimes.map { it.running })
+        assertEquals(1, runtimes[0].stopCalls)
         assertTrue(bond.isRunning())
+        assertEquals(listOf(1, 2, 3), bond.recover(12000))
     }
 
     @Test
-    fun twoFailedRoomsStopTheWholePool() {
+    fun twoFailedRoomsLeaveTwoRunning() {
         val runtimes = fakes(4)
+        runtimes[0].failReady = true
+        runtimes[1].failReady = true
+        val bond = OlcRtcBond(runtimes)
+
+        val active = bond.start(12000)
+
+        assertEquals(listOf(2), active)
+        assertTrue(bond.isRunning())
+        assertEquals(listOf(2, 3), bond.recover(12000))
+    }
+
+    @Test
+    fun firstReadyRoomStartsTheTunnelWithoutWaitingForTheRest() {
+        val events = mutableListOf<String>()
+        val runtimes = fakes(4, events)
         runtimes[1].failReady = true
         runtimes[2].failReady = true
+        runtimes[3].failReady = true
+        val bond = OlcRtcBond(runtimes)
+
+        val active = bond.start(12000)
+
+        assertEquals(listOf(0), active)
+        assertEquals(
+            listOf("start-1", "start-2", "start-3", "start-4", "ready-1-12000"),
+            events,
+        )
+        assertTrue(bond.isRunning())
+        assertFalse(bond.needsFullRecovery())
+    }
+
+    @Test
+    fun noReadyRoomsStopTheWholePool() {
+        val runtimes = fakes(4)
+        runtimes.forEach { it.failReady = true }
         val bond = OlcRtcBond(runtimes)
 
         val error = assertFailsWith<IllegalStateException> { bond.start(12000) }
 
-        assertEquals("ready-3", error.message)
+        assertEquals("ready-4", error.message)
         assertTrue(runtimes.none { it.running })
         assertFalse(bond.isRunning())
     }
@@ -76,6 +107,7 @@ class OlcRtcBondTest {
         val runtimes = fakes(4)
         val bond = OlcRtcBond(runtimes)
         bond.start(12000)
+        bond.recover(12000)
 
         runtimes[3].running = false
 
@@ -111,14 +143,19 @@ class OlcRtcBondTest {
     }
 
     @Test
-    fun twoStoppedRuntimesMakeTheWholeBondNotRunning() {
+    fun onlyTheLastStoppedRuntimeMakesTheWholeBondNotRunning() {
         val runtimes = fakes(4)
         runtimes.forEach { it.running = true }
         val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+        bond.recover(12000)
 
         runtimes[2].running = false
         runtimes[3].running = false
+        assertTrue(bond.isRunning())
 
+        runtimes[0].running = false
+        runtimes[1].running = false
         assertFalse(bond.isRunning())
     }
 

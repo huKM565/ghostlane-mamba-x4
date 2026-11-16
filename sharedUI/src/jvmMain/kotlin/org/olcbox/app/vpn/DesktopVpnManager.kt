@@ -1727,6 +1727,7 @@ class DesktopVpnManager private constructor(
         setDesktopBondRooms(List(4) { it })
         val launchGeneration = desktopBondGeneration
         val started = mutableListOf<DesktopOlcRtcBond.Room>()
+        val readyRooms = mutableSetOf<Int>()
         try {
             val binary = DesktopNativeAssets.resolveOlcRtcBinary()
             rooms.forEachIndexed { index, room ->
@@ -1772,13 +1773,17 @@ class DesktopVpnManager private constructor(
                 }
                 val process = launchRoom()
                 started += DesktopOlcRtcBond.Room(process, configPath, port, restart = ::launchRoom)
-                if (!waitForCoreSocks(port) { process.isAlive }) {
-                    stopProcess(process)
-                    addLog("olcRTC room ${index + 1} did not become ready; continuing without it")
-                }
             }
-            val bond = DesktopOlcRtcBond(started)
-            if (!bond.isRunning()) error("fewer than three bonded olcRTC rooms are ready")
+            for ((index, room) in started.withIndex()) {
+                if (waitForCoreSocks(room.port) { room.process.isAlive }) {
+                    readyRooms += index
+                    break
+                }
+                stopProcess(room.process)
+                addLog("olcRTC room ${index + 1} did not become ready; continuing without it")
+            }
+            val bond = DesktopOlcRtcBond(started, readyRooms)
+            if (!bond.isRunning()) error("no bonded olcRTC rooms are ready")
             desktopOlcRtcBond = bond
             desktopBalancedRooms = bond.activeIndexes()
             setDesktopBondRooms(desktopBalancedRooms)
@@ -1836,23 +1841,27 @@ class DesktopVpnManager private constructor(
         val bond = desktopOlcRtcBond ?: return true
         var activeRooms = bond.activeIndexes()
         setDesktopBondRooms(activeRooms)
-        if (activeRooms.size < 3) return false
+        if (activeRooms.isEmpty()) return false
         if (activeRooms != desktopBalancedRooms && !rebalanceDesktopBond(line, bond, activeRooms)) {
             return false
         }
 
         activeRooms = recoverDesktopBondRooms(bond)
         setDesktopBondRooms(activeRooms)
-        if (activeRooms.size < 3) return false
+        if (activeRooms.isEmpty()) return false
         if (activeRooms == desktopBalancedRooms) return true
         return rebalanceDesktopBond(line, bond, activeRooms)
     }
 
     private suspend fun recoverDesktopBondRooms(bond: DesktopOlcRtcBond): List<Int> {
         bond.recover()
-        bond.rooms.forEach { room ->
-            if (room.process.isAlive && !waitForCoreSocks(room.port) { room.process.isAlive }) {
-                stopProcess(room.process)
+        bond.rooms.forEachIndexed { index, room ->
+            if (room.process.isAlive) {
+                if (waitForCoreSocks(room.port) { room.process.isAlive }) {
+                    bond.markReady(index)
+                } else {
+                    stopProcess(room.process)
+                }
             }
         }
         return bond.activeIndexes()
@@ -2800,10 +2809,10 @@ class DesktopVpnManager private constructor(
                                         ?: if (refresh.getOrDefault(false)) {
                                             "core process exited unexpectedly" + (exitCode?.let { " with code $it" } ?: "")
                                         } else {
-                                            "fewer than three bonded olcRTC rooms are ready"
+                                            "no bonded olcRTC rooms are ready"
                                         },
                                     errorMessage = refreshError?.message
-                                        ?: if (refresh.getOrDefault(false)) "the core exited unexpectedly" else "fewer than three bonded rooms are ready",
+                                        ?: if (refresh.getOrDefault(false)) "the core exited unexpectedly" else "no bonded rooms are ready",
                                     requestGeneration = requestGeneration
                                 )
                             }
