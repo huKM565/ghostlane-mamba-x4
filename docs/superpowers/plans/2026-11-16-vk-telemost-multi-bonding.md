@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add homogeneous and mixed 4/8-room olcRTC profiles on Android and Windows, simplify the UI, and deploy both VDS plus their shared subscription through one Linux script.
+**Goal:** Add homogeneous 4-room and mixed 12-room olcRTC profiles on Android and Windows, simplify the UI, and deploy both VDS plus their shared subscription through one Linux script.
 
-**Architecture:** Replace the fixed Mamba-only four-room assumptions with an ordered list of independently configured olcRTC paths. Each path gets its own runtime/process and loopback SOCKS port; the existing Xray VLESS balancer and sing-box front remain the single tunnel. One managed set of twelve server-side rooms per VDS feeds one loopback VLESS Xray inbound; both Multi profiles reuse those rooms.
+**Architecture:** Replace the fixed Mamba-only four-room assumptions with an ordered list of independently configured olcRTC paths. Each path gets its own runtime/process and loopback SOCKS port; the existing Xray VLESS balancer and sing-box front remain the single tunnel. One managed set of twelve server-side rooms per VDS feeds one loopback VLESS Xray inbound; the Multi profile uses all twelve rooms.
 
 **Tech Stack:** Kotlin Multiplatform, Compose, Android gomobile, Windows JVM processes, Go 1.26+, Xray 26.7.11, sing-box 1.13.14, Bash, Python unittest, systemd, SSH.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Profiles per VDS: Mamba 4x, VK 4x, Телемост 4x, Multi VK + Mamba, Multi Телемост + Mamba; groups are exactly `Германия` and `Финляндия`.
+- Profiles per VDS: Mamba 4x, VK 4x, Телемост 4x and one Multi 12x; groups are exactly `Германия` and `Финляндия`, with eight profiles in total.
 - Start from the first ready path, retain the tunnel while at least one path remains, and never change the TUN-facing port during room recovery.
 - Mamba uses DataChannel; VK and Телемост use VP8. A single TCP connection stays on one path.
 - Existing single olcRTC profiles, failover `##rooms`, old Mamba 4x subscriptions and German router/client room URLs remain compatible.
@@ -47,11 +47,11 @@
 
 - [ ] **Step 1: Write failing model and import tests**
 
-Add tests proving: legacy Mamba 4x yields four paths; VK and Телемост 4x parse through existing `##rooms`; a Multi with one primary plus seven `##bond-room` yields four Mamba DataChannel then four VK VP8 paths; `LocationEntry.from(...).location` retains all eight; refresh retains the prior saved list when the new response is malformed.
+Add tests proving: legacy Mamba 4x yields four paths; VK and Телемост 4x parse through existing `##rooms`; a Multi with one primary plus eleven `##bond-room` yields four Mamba DataChannel, four VK VP8 and four Телемост VP8 paths; `LocationEntry.from(...).location` retains all twelve; refresh retains the prior saved list when the new response is malformed.
 
 ```kotlin
-assertEquals(listOf("jitsi", "jitsi", "jitsi", "jitsi", "vkcalls", "vkcalls", "vkcalls", "vkcalls"), paths.map { it.provider })
-assertEquals(listOf("datachannel", "datachannel", "datachannel", "datachannel", "vp8channel", "vp8channel", "vp8channel", "vp8channel"), paths.map { it.transport })
+assertEquals(List(4) { "jitsi" } + List(4) { "vkcalls" } + List(4) { "telemost" }, paths.map { it.provider })
+assertEquals(List(4) { "datachannel" } + List(8) { "vp8channel" }, paths.map { it.transport })
 ```
 
 - [ ] **Step 2: Run the focused tests and confirm missing-model failure**
@@ -61,7 +61,7 @@ Expected: FAIL because `BondRoomConfig` and repeated-header storage do not exist
 
 - [ ] **Step 3: Implement the model and repeated-header parser**
 
-Add the exact interfaces above. Keep the existing single-value field map for current headers and add a per-location `MutableList<BondRoomConfig>` for `bond-room`; parse each full URI through the existing `parseOlcRtcUri`, never split a URI on commas. Validate 4 or 8 unique provider+room paths, nonblank keys, compatible transports and a valid plain TCP VLESS bond. A malformed refreshed entry is omitted while the repository's existing preservation logic keeps its previous entry.
+Add the exact interfaces above. Keep the existing single-value field map for current headers and add a per-location `MutableList<BondRoomConfig>` for `bond-room`; parse each full URI through the existing `parseOlcRtcUri`, never split a URI on commas. Validate 4 or 12 unique provider+room paths, nonblank keys, compatible transports and a valid plain TCP VLESS bond. A malformed refreshed entry is omitted while the repository's existing preservation logic keeps its previous entry.
 
 - [ ] **Step 4: Run all model/repository tests**
 
@@ -75,7 +75,7 @@ git add sharedUI/src/commonMain/kotlin/org/olcbox/app/data/model/LocationConfig.
 git commit -m "feat: parse mixed olcrtc room pools"
 ```
 
-### Task 2: Xray balancing for one through eight active paths
+### Task 2: Xray balancing for one through twelve active paths
 
 **Files:**
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/net/XrayConfig.kt:63-168`
@@ -84,20 +84,20 @@ git commit -m "feat: parse mixed olcrtc room pools"
 
 **Interfaces:**
 - Consumes: `LocationConfig.bondVlessLink` from Task 1.
-- Produces: existing `XrayConfig.buildVlessBond(...)`, now requiring `roomPorts.size in 1..8` and retaining all existing Mux/XUDP values.
+- Produces: existing `XrayConfig.buildVlessBond(...)`, now requiring `roomPorts.size in 1..12` and retaining all existing Mux/XUDP values.
 
-- [ ] **Step 1: Write failing eight-port and invalid-input tests**
+- [ ] **Step 1: Write failing twelve-port and invalid-input tests**
 
-Assert eight VLESS plus eight SOCKS outbounds, selectors `vless-room-1` through `vless-room-8`, and the exact eight input ports. Keep tests rejecting empty, duplicate and nine-port lists.
+Assert twelve VLESS plus twelve SOCKS outbounds, selectors `vless-room-1` through `vless-room-12`, and the exact twelve input ports. Keep tests rejecting empty, duplicate and thirteen-port lists.
 
-- [ ] **Step 2: Verify the eight-port test fails**
+- [ ] **Step 2: Verify the twelve-port test fails**
 
 Run: `./gradlew :sharedUI:jvmTest --tests 'org.olcbox.app.net.XrayConfigBondTest'`
 Expected: FAIL on the current `1..4` requirement.
 
 - [ ] **Step 3: Raise only the validated upper bound and update stale text**
 
-Use `1..8`; preserve output format and existing tags. Update the error to `between one and eight distinct room ports`. Add an eight-path dump fixture for real Xray validation.
+Use `1..12`; preserve output format and existing tags. Update the error to `between one and twelve distinct room ports`. Add a twelve-path dump fixture for real Xray validation.
 
 - [ ] **Step 4: Run unit and pinned-core checks**
 
@@ -108,21 +108,21 @@ Expected: PASS; Xray 26.7.11 accepts every emitted config.
 
 ```bash
 git add sharedUI/src/commonMain/kotlin/org/olcbox/app/net/XrayConfig.kt sharedUI/src/commonTest/kotlin/org/olcbox/app/net/XrayConfigBondTest.kt sharedUI/src/jvmTest/kotlin/org/olcbox/app/net/XrayConfigDumpTest.kt
-git commit -m "feat: balance eight vless room paths"
+git commit -m "feat: balance twelve vless room paths"
 ```
 
-### Task 3: Generic four/eight-runtime bond lifecycle
+### Task 3: Generic four/twelve-runtime bond lifecycle
 
 **Files:**
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/net/OlcRtcBond.kt`
 - Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/net/OlcRtcBondTest.kt`
 
 **Interfaces:**
-- Produces: `OlcRtcBond(runtimes: List<OlcRtcBondRuntime>)` accepting exactly 4 or 8 runtimes; existing `start`, `recover`, `activeIndexes`, `requestOccupancy`, `stop`, `needsFullRecovery`, `isRunning`, `setDNS` signatures remain unchanged.
+- Produces: `OlcRtcBond(runtimes: List<OlcRtcBondRuntime>)` accepting exactly 4 or 12 runtimes; existing `start`, `recover`, `activeIndexes`, `requestOccupancy`, `stop`, `needsFullRecovery`, `isRunning`, `setDNS` signatures remain unchanged.
 
 - [ ] **Step 1: Write failing size and recovery tests**
 
-Assert sizes 3 and 5 fail, 4 and 8 succeed. For eight runtimes, prove all start, the first ready one returns immediately, later recovery returns all eight, seven stopped runtimes still leave the bond running, and the last stopped runtime makes `needsFullRecovery()` true.
+Assert sizes 3 and 5 fail, 4 and 12 succeed. For twelve runtimes, prove all start, the first ready one returns immediately, later recovery returns all twelve, eleven stopped runtimes still leave the bond running, and the last stopped runtime makes `needsFullRecovery()` true.
 
 - [ ] **Step 2: Verify new lifecycle tests fail**
 
@@ -131,18 +131,18 @@ Expected: FAIL on the fixed four-runtime requirement.
 
 - [ ] **Step 3: Replace only fixed-size assumptions**
 
-Require `runtimes.size == 4 || runtimes.size == 8`; retain ordered indices and existing cleanup semantics. Do not add provider logic to this generic class.
+Require `runtimes.size == 4 || runtimes.size == 12`; retain ordered indices and existing cleanup semantics. Do not add provider logic to this generic class.
 
 - [ ] **Step 4: Run lifecycle tests**
 
 Run: `./gradlew :sharedUI:jvmTest --tests 'org.olcbox.app.net.OlcRtcBondTest'`
-Expected: PASS for four and eight paths, stop, DNS and occupancy replay.
+Expected: PASS for four and twelve paths, stop, DNS and occupancy replay.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add sharedUI/src/commonMain/kotlin/org/olcbox/app/net/OlcRtcBond.kt sharedUI/src/commonTest/kotlin/org/olcbox/app/net/OlcRtcBondTest.kt
-git commit -m "feat: support eight-runtime olcrtc bonds"
+git commit -m "feat: support twelve-runtime olcrtc bonds"
 ```
 
 ### Task 4: Android mixed-provider pools
@@ -155,13 +155,13 @@ git commit -m "feat: support eight-runtime olcrtc bonds"
 - Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/net/BondPathPlannerTest.kt`
 
 **Interfaces:**
-- Consumes: `LocationConfig.bondedPaths()` and 1..8-port Xray builder.
+- Consumes: `LocationConfig.bondedPaths()` and 1..12-port Xray builder.
 - Produces: `data class BondPathPlan(val paths: List<BondRoomConfig>, val ports: List<Int>)`; `fun planBondPaths(config: LocationConfig, allocatePort: () -> Int): BondPathPlan` with equal path/port counts and unique ports.
 - Android continues to expose the same active index lists to recovery until Task 7 replaces UI status storage.
 
 - [ ] **Step 1: Write failing planner and service regression tests**
 
-Plan a mixed eight-path profile and assert all eight room/provider/key assignments and unique ports. Assert failures return `false` only when no path can start, cleanup covers eight runtimes, occupancy replay follows every activation, and rebalance keeps the existing front port.
+Plan a mixed twelve-path profile and assert all twelve room/provider/key assignments and unique ports. Assert failures return `false` only when no path can start, cleanup covers twelve runtimes, occupancy replay follows every activation, and rebalance keeps the existing front port.
 
 - [ ] **Step 2: Run focused tests before implementation**
 
@@ -194,13 +194,13 @@ git commit -m "feat: run mixed room pools on android"
 
 **Interfaces:**
 - Consumes: `planBondPaths` from Task 4.
-- Produces: `DesktopOlcRtcBond` accepting exactly 4 or 8 rooms; `desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>, expectedSize: Int)` replaces the hard-coded four-room check.
+- Produces: `DesktopOlcRtcBond` accepting exactly 4 or 12 rooms; `desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>, expectedSize: Int)` replaces the hard-coded four-room check.
 
-- [ ] **Step 1: Write failing eight-process tests**
+- [ ] **Step 1: Write failing twelve-process tests**
 
-Assert eight unique ports survive, a dead process is restarted, active subsets reconfigure Xray, and a zero-active refresh returns false rather than emitting an empty Xray config. Verify each generated desktop command receives its own provider/transport/room/key.
+Assert twelve unique ports survive, a dead process is restarted, active subsets reconfigure Xray, and a zero-active refresh returns false rather than emitting an empty Xray config. Verify each generated desktop command receives its own provider/transport/room/key.
 
-- [ ] **Step 2: Verify fixed-four tests fail for eight rooms**
+- [ ] **Step 2: Verify fixed-four tests fail for twelve rooms**
 
 Run: `./gradlew :sharedUI:jvmTest --tests 'org.olcbox.app.vpn.desktop.DesktopOlcRtcBondTest' --tests 'org.olcbox.app.vpn.desktop.DesktopBondIntegrationTest'`
 Expected: FAIL on size and watcher assumptions.
@@ -286,7 +286,7 @@ git commit -m "feat: report olcrtc room connection states"
 
 - [ ] **Step 1: Write failing status conversion and rendering tests**
 
-Cover raw null -> null, raw 0 -> 0, active Mamba raw 2 + relay -> 1, raw 1 + relay -> 0, absent relay -> no subtraction, and VK/Телемост without provider occupancy -> `—`. Render eight labelled indicators and both exact Russian errors `Подключение не удалось` and `Сервер не смог подключиться`; states survive a later occupancy event.
+Cover raw null -> null, raw 0 -> 0, active Mamba raw 2 + relay -> 1, raw 1 + relay -> 0, absent relay -> no subtraction, and VK/Телемост without provider occupancy -> `—`. Render twelve labelled indicators and both exact Russian errors `Подключение не удалось` and `Сервер не смог подключиться`; states survive a later occupancy event.
 
 - [ ] **Step 2: Verify status tests fail**
 
@@ -309,44 +309,53 @@ git add sharedUI/src
 git commit -m "feat: show mixed room health and occupancy"
 ```
 
-### Task 8: Remove unused home-screen UI
+### Task 8: Remove unused home-screen UI and update Android branding
 
 **Files:**
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/features/home/components/LocationSelection.kt`
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/features/home/HomeScreenContent.kt`
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/features/home/RoomDetailPane.kt`
 - Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/components/kit/PkBoard.kt`
+- Modify: `sharedUI/src/commonMain/composeResources/values/strings.xml`, `values-ru/strings.xml` and other localized `notification_title_*` values that still expose Ghostlane
+- Modify: `androidApp/src/main/res/mipmap-*/ic_launcher*.png`, `mipmap-anydpi-v26/ic_launcher.xml` and `playstore_icon.png`
 - Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/ui/components/kit/PkBoardModelTest.kt`
 - Test: `sharedUI/src/jvmTest/kotlin/org/olcbox/app/ui/render/BondRoomIndicatorsTest.kt`
+- Test: `androidApp/src/androidTest/kotlin/org/olcbox/app/AndroidBrandingTest.kt`
 - Test: existing home-screen render/model tests
 
 **Interfaces:**
 - Consumes: `bondRoomStates` from Task 7.
 - Preserves: profile selection, connect control, add/update subscription, grouping, pin/remove controls and basic settings.
+- Android VPN notification titles start with `ИлюхаLine`; the launcher label remains `ИлюхаLine`.
+- Every legacy and adaptive launcher variant shows one plain, legible Cyrillic `И` instead of the Ghostlane logo. Do not alter the existing applicationId or settings storage for this visual change.
 
-- [ ] **Step 1: Write failing UI-absence tests**
+- [ ] **Step 1: Write failing UI-absence and branding tests**
 
-With ten profiles across `Германия` and `Финляндия`, assert both groups and all profiles remain while transport chips, ping values/buttons, seats, history graph, plan/quota bar, provider site and support controls have no semantics nodes. Assert selected Multi still shows its eight states.
+With eight profiles across `Германия` and `Финляндия`, assert both groups and all profiles remain while transport chips, ping values/buttons, seats, history graph, plan/quota bar, provider site and support controls have no semantics nodes. Assert selected Multi still shows its twelve states. Add an installed-APK test that resolves the launcher label and VPN notification resources, requires `ИлюхаLine`, and rejects `Ghostlane`; check that all referenced launcher icon resources exist.
 
-- [ ] **Step 2: Verify the old UI fails the absence tests**
+- [ ] **Step 2: Verify the old UI and branding fail the tests**
 
 Run: `./gradlew :sharedUI:jvmTest --tests '*Home*' --tests '*PkBoard*' --tests '*BondRoomIndicatorsTest'`
 Expected: FAIL on removed controls still being present.
+Run the new instrumentation test on the connected Android device with the existing APK.
+Expected: FAIL on the old notification title and/or icon resources.
 
-- [ ] **Step 3: Remove only presentation and obsolete parameters**
+- [ ] **Step 3: Remove obsolete UI and apply Android branding**
 
 Stop rendering filters, ping, seats/history, plan/quota and provider links. Remove parameters made unused by those blocks and update comments that describe the old cards. Keep subscription refresh/remove and all non-UI probe functionality out of scope rather than deleting working engine code.
+Replace every `notification_title_*` user-visible app name with `ИлюхаLine` while retaining status text such as proxy/connected. Redraw launcher foreground, legacy icons and Play Store artwork as a simple large `И`, keeping the existing ИлюхаLine background color and no other logo or lettering. Generate each required density from one master rather than stretching a small bitmap; inspect legacy and adaptive icons at launcher size and confirm the letter is centered, uncropped and readable.
 
-- [ ] **Step 4: Run UI and build verification**
+- [ ] **Step 4: Run UI, branding and build verification**
 
-Run: `./gradlew :sharedUI:jvmTest :androidApp:assembleDebug :desktopApp:compileKotlin`
-Expected: PASS and both targets compile.
+Run: `./gradlew :sharedUI:jvmTest :androidApp:assembleDebug :androidApp:assembleGithubRelease :desktopApp:compileKotlin`
+Install the debug APK on the Android device, run `:androidApp:connectedDebugAndroidTest`, open the notification shade during a VPN connection, and inspect the actual launcher icon and notification title.
+Expected: JVM and instrumentation tests PASS, both targets compile, the shade shows `ИлюхаLine`, and the icon is only the letter `И`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add sharedUI/src
-git commit -m "feat: simplify ilyukhaline server ui"
+git add sharedUI/src androidApp/src
+git commit -m "feat: simplify ui and update android branding"
 ```
 
 ### Task 9: Deployment script configuration, preflight and offline harness
@@ -435,12 +444,12 @@ git commit -m "feat: deploy olcrtc room infrastructure"
 - Create: `deploy/nginx-ilyukhaline-subscription.conf.template`
 
 **Interfaces:**
-- `subscription --output FILE` reads actual managed configs for both VDS and writes ten profiles in the Task 1 syntax.
+- `subscription --output FILE` reads actual managed configs for both VDS and writes eight profiles in the Task 1 syntax.
 - `publish` uploads only a generated subscription and installs the isolated nginx location at the configured secret path.
 
 - [ ] **Step 1: Write failing subscription snapshot tests**
 
-Using made-up German and Finnish configs, assert exact group/profile order, four paths in homogeneous profiles, eight in Multi, reused room URLs in Multi, and no unmanaged profile inclusion. Assert publish refuses a missing/unescaped path and enables no directory listing.
+Using made-up German and Finnish configs, assert exact group/profile order, four paths in homogeneous profiles, twelve in Multi, reused room URLs in Multi, and no unmanaged profile inclusion. Assert publish refuses a missing/unescaped path and enables no directory listing.
 
 - [ ] **Step 2: Verify generation tests fail**
 
@@ -449,12 +458,12 @@ Expected: FAIL because subscription/publish are absent.
 
 - [ ] **Step 3: Implement generation and isolated publication**
 
-Generate each URI directly from its managed server config. Use `##rooms` for homogeneous 4x and primary plus seven `##bond-room` lines for Multi. Write local output with mode 600, upload through a temporary remote file, validate nginx config before reload, and never print the subscription body or URL to CI logs.
+Generate each URI directly from its managed server config. Use `##rooms` for homogeneous 4x and primary plus eleven `##bond-room` lines for Multi. Write local output with mode 600, upload through a temporary remote file, validate nginx config before reload, and never print the subscription body or URL to CI logs.
 
 - [ ] **Step 4: Run script tests and import the made-up output in app tests**
 
 Run: `python3 scripts/test_deploy_olcrtc_vds.py && ./gradlew :sharedUI:jvmTest --tests 'org.olcbox.app.data.datasource.LocationsRepositoryImplTest'`
-Expected: PASS; generated fixture imports as exactly ten profiles.
+Expected: PASS; generated fixture imports as exactly eight profiles.
 
 - [ ] **Step 5: Commit**
 
@@ -483,7 +492,7 @@ Expected: four Mamba, four VK, four permanent Телемост rooms and one ded
 
 - [ ] **Step 3: Verify old and new German paths**
 
-Run `status`, then import a local German-only generated subscription on a test Android device. For each of five profiles verify external IP and real TCP plus UDP/XUDP traffic. Stop one room at a time and confirm the tunnel remains; verify start with only one available room and later recovery. Confirm the existing router/client profile still passes traffic.
+Run `status`, then import a local German-only generated subscription on a test Android device. For each of four profiles verify external IP and real TCP plus UDP/XUDP traffic. Stop one room at a time and confirm the tunnel remains; verify start with only one available room and later recovery. Confirm the existing router/client profile still passes traffic.
 
 - [ ] **Step 4: Repeat deploy to prove idempotence**
 
@@ -505,18 +514,18 @@ Expected: the same twelve-room layout and dedicated loopback Xray, without touch
 
 - [ ] **Step 2: Verify all Finnish profiles**
 
-For each of five profiles verify the Finnish external IP, TCP and UDP/XUDP, first-room start, single-room loss and recovery.
+For each of four profiles verify the Finnish external IP, TCP and UDP/XUDP, first-room start, single-room loss and recovery.
 Expected: every profile works or the deployment remains unpublished.
 
 - [ ] **Step 3: Generate and publish the combined subscription**
 
 Run `subscription --output` using both actual VDS configs, inspect only sanitized counts, then `publish`.
-Expected: one HTTPS URL returns ten profiles, five `Германия` then five `Финляндия`; directory listing is off.
+Expected: one HTTPS URL returns eight profiles, four `Германия` then four `Финляндия`; directory listing is off.
 
 - [ ] **Step 4: Verify import and refresh on real clients**
 
 Import the URL on Android and Windows. Connect each profile, verify room labels/errors/occupancy behavior, then refresh and confirm all Multi paths survive.
-Expected: all ten profiles and refresh work end-to-end.
+Expected: all eight profiles and refresh work end-to-end.
 
 ### Task 14: Full release verification and delivery
 
