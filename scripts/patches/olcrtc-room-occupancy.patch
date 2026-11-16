@@ -52,7 +52,7 @@ index e82ff063..5a76524c 100644
 @@ -21,6 +21,14 @@ func TestEngineConfigCarriesTheICELocalIP(t *testing.T) {
  	}
  }
- 
+
 +// ai-generated: the room occupancy callback crosses the provider config.
 +func TestEngineConfigCarriesTheOccupancyCallback(t *testing.T) {
 +	got := engineConfig(Config{OnOccupancy: func(int) {}}, engine.Credentials{URL: "u"}, nil)
@@ -83,7 +83,7 @@ index a9280478..c6fc5aec 100644
 --- a/internal/engine/jitsi/jitsi.go
 +++ b/internal/engine/jitsi/jitsi.go
 @@ -76,6 +76,7 @@ type Session struct {
- 
+
  	onData              func([]byte)
  	onPeerData          func(peerID string, data []byte)
 +	occupancy           occupancyReporter // ai-generated: MUC roster reporting.
@@ -101,7 +101,7 @@ index a9280478..c6fc5aec 100644
 @@ -266,6 +268,8 @@ func (s *Session) Connect(ctx context.Context) error {
  	s.setJSession(jSess)
  	logger.Infof("jitsi: MUC joined %s/%s; waiting for peer …", s.host, s.room)
- 
+
 +	s.reportOccupancy()
 +	s.goLaunch(s.watchOccupancy)
  	s.goLaunch(s.sendLoop)
@@ -305,10 +305,10 @@ index f0dedd1a..161d658a 100644
  	}
  	if cfg.Provider != "provider" || cfg.RoomURL != "room" || cfg.Traffic.MaxPayloadSize != 4096 {
 diff --git a/mobile/listener.go b/mobile/listener.go
-index 82ac7ecd..409cc3a7 100644
+index 82ac7ecd..1856bbb5 100644
 --- a/mobile/listener.go
 +++ b/mobile/listener.go
-@@ -42,3 +42,29 @@ func (r *Runtime) notifySessionOpened(gen *runGeneration, room, sessionID string
+@@ -42,3 +42,52 @@ func (r *Runtime) notifySessionOpened(gen *runGeneration, room, sessionID string
  	}
  	listener.OnSessionOpened(room, sessionID)
  }
@@ -332,14 +332,37 @@ index 82ac7ecd..409cc3a7 100644
 +	r.mu.Lock()
 +	listener := r.occupancyListener
 +	live := r.isCurrentGenerationLocked(gen) && !gen.stopRequested
++	if live {
++		gen.occupancyRoom = room
++		gen.occupancyParticipants = participants
++		gen.occupancyKnown = true
++	}
 +	r.mu.Unlock()
 +	if listener == nil || !live {
 +		return
 +	}
 +	listener.OnRoomOccupancyChanged(room, participants)
 +}
++
++// RequestRoomOccupancy replays the latest roster snapshot of the running generation.
++// ai-generated: cached occupancy replay for hosts that activate a room after its first event.
++func (r *Runtime) RequestRoomOccupancy() {
++	r.mu.Lock()
++	gen := r.current
++	if gen == nil || r.state != stateRunning || gen.stopRequested || !gen.occupancyKnown {
++		r.mu.Unlock()
++		return
++	}
++	listener := r.occupancyListener
++	room := gen.occupancyRoom
++	participants := gen.occupancyParticipants
++	r.mu.Unlock()
++	if listener != nil {
++		listener.OnRoomOccupancyChanged(room, participants)
++	}
++}
 diff --git a/mobile/listener_test.go b/mobile/listener_test.go
-index a177744d..b0d3b6e8 100644
+index a177744d..d0cbb57a 100644
 --- a/mobile/listener_test.go
 +++ b/mobile/listener_test.go
 @@ -4,6 +4,7 @@ package mobile
@@ -350,10 +373,10 @@ index a177744d..b0d3b6e8 100644
  	"reflect"
  	"sync"
  	"testing"
-@@ -112,6 +113,47 @@ func TestSessionListenerIgnoresAStoppingGeneration(t *testing.T) {
+@@ -112,6 +113,76 @@ func TestSessionListenerIgnoresAStoppingGeneration(t *testing.T) {
  	}
  }
- 
+
 +// ai-generated: the host receives roster counts without parsing engine logs.
 +func TestOccupancyListenerReceivesRoomCounts(t *testing.T) {
 +	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
@@ -378,6 +401,35 @@ index a177744d..b0d3b6e8 100644
 +	}
 +}
 +
++// ai-generated: regression test for replaying a cached roster after room activation.
++func TestRequestRoomOccupancyReplaysLatestCount(t *testing.T) {
++	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
++		cfg.OnOccupancy(3)
++		onReady("127.0.0.1:1080")
++		<-ctx.Done()
++		return ctx.Err()
++	})
++	listener := &recordingOccupancyListener{}
++	runtime.SetOccupancyListener(listener)
++	if err := runtime.Start(); err != nil {
++		t.Fatalf("Start() error = %v", err)
++	}
++	if err := runtime.WaitReady(2000); err != nil {
++		t.Fatalf("WaitReady() error = %v", err)
++	}
++	runtime.RequestRoomOccupancy()
++	if got, want := listener.events(), []string{testRoom + " 3", testRoom + " 3"}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("occupancy events = %v, want %v", got, want)
++	}
++	if err := runtime.Stop(100); err != nil {
++		t.Fatalf("Stop() error = %v", err)
++	}
++	runtime.RequestRoomOccupancy()
++	if got, want := listener.events(), []string{testRoom + " 3", testRoom + " 3"}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("occupancy events after stop = %v, want %v", got, want)
++	}
++}
++
 +type recordingOccupancyListener struct {
 +	mu       sync.Mutex
 +	received []string
@@ -399,10 +451,38 @@ index a177744d..b0d3b6e8 100644
  	mu     sync.Mutex
  	opened []string
 diff --git a/mobile/runtime.go b/mobile/runtime.go
-index d0854997..6419e49f 100644
+index d0854997..ecc7efc4 100644
 --- a/mobile/runtime.go
 +++ b/mobile/runtime.go
-@@ -69,6 +69,9 @@ type Runtime struct {
+@@ -48,15 +48,18 @@ type runtimeState string
+ type clientRunner func(context.Context, client.Config, func(string)) error
+
+ type runGeneration struct {
+-	id            uint64
+-	cfg           client.Config
+-	cancel        context.CancelFunc
+-	ready         chan struct{}
+-	done          chan struct{}
+-	readyOnce     sync.Once
+-	doneOnce      sync.Once
+-	stopRequested bool
+-	err           error
++	id                    uint64
++	cfg                   client.Config
++	cancel                context.CancelFunc
++	ready                 chan struct{}
++	done                  chan struct{}
++	readyOnce             sync.Once
++	doneOnce              sync.Once
++	stopRequested         bool
++	err                   error
++	occupancyRoom         string
++	occupancyParticipants int
++	occupancyKnown        bool
+ }
+
+ // Runtime owns one independently configured mobile client lifecycle.
+@@ -69,6 +72,9 @@ type Runtime struct {
  	runner         clientRunner
  	// listener hears each session open; see SetSessionListener.
  	listener SessionListener
@@ -410,9 +490,9 @@ index d0854997..6419e49f 100644
 +	// ai-generated: the room occupancy listener.
 +	occupancyListener OccupancyListener
  }
- 
+
  // New returns an idle Runtime with documented mobile defaults.
-@@ -165,6 +168,7 @@ func (r *Runtime) run(ctx context.Context, gen *runGeneration) {
+@@ -165,6 +171,7 @@ func (r *Runtime) run(ctx context.Context, gen *runGeneration) {
  		cfg := gen.cfg
  		cfg.RoomURL = profile.RoomID
  		cfg.OnSessionOpen = func(sessionID string) { r.notifySessionOpened(gen, profile.RoomID, sessionID) }

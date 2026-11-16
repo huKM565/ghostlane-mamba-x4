@@ -134,6 +134,19 @@ class OlcboxVpnServiceNativeRunTest {
     }
 
     @Test
+    fun bondActivationReplaysCachedOccupancyAfterMarkingRoomsActive() {
+        for (name in listOf("startMobileBond", "refreshMobileBond")) {
+            val body = member(name)
+            val activations = Regex("""OlcboxVpnState\.setBondRooms\(activeRooms\)""").findAll(body).toList()
+            assertTrue(activations.isNotEmpty(), "$name does not activate bond rooms")
+            activations.forEach { activation ->
+                val replay = body.indexOf("bond.requestOccupancy()", activation.range.last)
+                assertTrue(replay > activation.range.last, "$name does not replay occupancy after activating a room")
+            }
+        }
+    }
+
+    @Test
     fun cleanupWaitsForRecoveryBeforeStoppingTransportAndStopsItAgainAfterCancelledStart() {
         val cleanup = member("cleanup")
         val watchdogJoin = cleanup.indexOf("cancelledWatchdog?.join()")

@@ -1507,6 +1507,7 @@ class OlcboxVpnService : VpnService() {
             val activeRooms = bond.start(OLCRTC_READY_TIMEOUT_MS.toInt())
             bondBalancedRooms = activeRooms
             OlcboxVpnState.setBondRooms(activeRooms)
+            bond.requestOccupancy()
             if (requestedGeneration != generation) {
                 addLog("olcRTC bond start superseded")
                 return false
@@ -2001,6 +2002,7 @@ class OlcboxVpnService : VpnService() {
 
             var activeRooms = bond.activeIndexes()
             OlcboxVpnState.setBondRooms(activeRooms)
+            bond.requestOccupancy()
             if (activeRooms.isEmpty()) return@withLock
             if (activeRooms != bondBalancedRooms && !rebalanceMobileBond(location, activeRooms)) {
                 return@withLock
@@ -2009,6 +2011,7 @@ class OlcboxVpnService : VpnService() {
             activeRooms = bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt())
             if (!current()) return@withLock
             OlcboxVpnState.setBondRooms(activeRooms)
+            bond.requestOccupancy()
             if (activeRooms.isEmpty() || activeRooms == bondBalancedRooms) return@withLock
             rebalanceMobileBond(location, activeRooms)
         }

@@ -143,6 +143,19 @@ class OlcRtcBondTest {
     }
 
     @Test
+    fun occupancyReplayRequestsOnlyActiveRooms() {
+        val runtimes = fakes(4)
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+        bond.recover(12000)
+        runtimes[3].running = false
+
+        bond.requestOccupancy()
+
+        assertEquals(listOf(1, 1, 1, 0), runtimes.map { it.occupancyRequests })
+    }
+
+    @Test
     fun onlyTheLastStoppedRuntimeMakesTheWholeBondNotRunning() {
         val runtimes = fakes(4)
         runtimes.forEach { it.running = true }
@@ -172,6 +185,7 @@ class OlcRtcBondTest {
         var failDns = false
         var stopCalls = 0
         var stopTimeouts = 0
+        var occupancyRequests = 0
         var dns = ""
 
         override fun start() {
@@ -192,6 +206,10 @@ class OlcRtcBondTest {
         }
 
         override fun isRunning(): Boolean = running
+
+        override fun requestOccupancy() {
+            occupancyRequests++
+        }
 
         override fun setDNS(servers: String) {
             dns = servers

@@ -14,5 +14,7 @@ class GomobileOlcRtcBondRuntime(
 
     override fun isRunning(): Boolean = runtime.isRunning()
 
+    override fun requestOccupancy() = runtime.requestRoomOccupancy()
+
     override fun setDNS(servers: String) = runtime.setDNS(servers)
 }
