@@ -19,6 +19,24 @@ import org.olcbox.app.net.transportKind
 import org.olcbox.app.net.OutboundSpec
 
 @Serializable
+data class BondRoomConfig(
+    val room: String,
+    val key: String,
+    val provider: String,
+    val transport: String
+) {
+    fun normalized(): BondRoomConfig {
+        val normalizedProvider = LocationConfig.normalizeProvider(provider)
+        return copy(
+            room = room.trim(),
+            key = key.trim(),
+            provider = normalizedProvider,
+            transport = LocationConfig.normalizeTransport(transport, normalizedProvider)
+        )
+    }
+}
+
+@Serializable
 data class LocationConfig(
     val name: String = "",
     val id: String = "",
@@ -43,7 +61,9 @@ data class LocationConfig(
     @SerialName("failover_rooms")
     val failoverRoomIds: List<String> = emptyList(),
     @SerialName("bond_vless")
-    val bondVlessLink: String? = null
+    val bondVlessLink: String? = null,
+    @SerialName("bonded_rooms")
+    val bondedRoomConfigs: List<BondRoomConfig> = emptyList()
 ) {
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
@@ -60,7 +80,16 @@ data class LocationConfig(
                 .map { it.trim() }
                 .filter { it.isNotBlank() && it != id.trim() }
                 .distinct(),
-            bondVlessLink = bondVlessLink?.trim()
+            bondVlessLink = bondVlessLink?.trim(),
+            bondedRoomConfigs = bondedRoomConfigs.mapNotNull { path ->
+                val normalizedPath = path.normalized()
+                normalizedPath.takeIf {
+                    path.room.isNotBlank() &&
+                        path.key.isNotBlank() &&
+                        transportOrNull(path.transport) == normalizedPath.transport &&
+                        normalizedPath.transport in supportedTransportsForProvider(normalizedPath.provider)
+                }
+            }.distinctBy { it.provider to it.room }
         )
     }
 
@@ -70,7 +99,15 @@ data class LocationConfig(
         .filter { it.isNotBlank() }
         .distinct()
 
-    fun bondedRooms(): List<String> = if (bondVlessLink == null) emptyList() else failoverRooms()
+    fun bondedPaths(): List<BondRoomConfig> {
+        if (bondedRoomConfigs.isNotEmpty()) return bondedRoomConfigs
+        if (bondVlessLink == null) return emptyList()
+        return failoverRooms().map { room ->
+            BondRoomConfig(room, key, bypassProvider, transport).normalized()
+        }
+    }
+
+    fun bondedRooms(): List<String> = bondedPaths().map { it.room }
 
     fun isComplete(): Boolean = when (kind) {
         LocationKind.Olcrtc -> id.isNotBlank() && key.isNotBlank() && hasValidBond()
@@ -79,8 +116,17 @@ data class LocationConfig(
     }
 
     private fun hasValidBond(): Boolean {
-        val link = bondVlessLink ?: return true
-        return bondedRooms().size == 4 && LinkParser.parse(link) is OutboundSpec.Vless
+        val link = bondVlessLink ?: return bondedRoomConfigs.isEmpty()
+        val paths = bondedPaths()
+        val spec = LinkParser.parse(link) as? OutboundSpec.Vless ?: return false
+        return paths.size in setOf(4, 12) &&
+            paths.all { path ->
+                path.room.isNotBlank() &&
+                    path.key.isNotBlank() &&
+                    path.transport in supportedTransportsForProvider(path.provider)
+            } &&
+            paths.distinctBy { it.provider to it.room }.size == paths.size &&
+            spec.plain && spec.transport is org.olcbox.app.net.TransportSpec.Tcp
     }
 
     /**
@@ -574,7 +620,9 @@ data class LocationEntry(
     @SerialName("raw_link")
     val rawLink: String? = null,
     @SerialName("bond_vless")
-    val bondVlessLink: String? = null
+    val bondVlessLink: String? = null,
+    @SerialName("bonded_rooms")
+    val bondedRoomConfigs: List<BondRoomConfig> = emptyList()
 ) {
     val location: LocationConfig
         get() {
@@ -604,7 +652,8 @@ data class LocationEntry(
                 kind = kind,
                 rawLink = rawLink,
                 failoverRoomIds = failoverRooms,
-                bondVlessLink = bondVlessLink
+                bondVlessLink = bondVlessLink,
+                bondedRoomConfigs = bondedRoomConfigs
             ).normalized()
         }
 
@@ -630,7 +679,8 @@ data class LocationEntry(
                 ?.takeUnless { it.isEmpty() },
             kind = config.kind,
             rawLink = config.rawLink,
-            bondVlessLink = config.bondVlessLink
+            bondVlessLink = config.bondVlessLink,
+            bondedRoomConfigs = config.bondedRoomConfigs
         )
     }
 
@@ -658,7 +708,8 @@ data class LocationEntry(
                 metadata = metadata,
                 kind = config.kind,
                 rawLink = config.rawLink,
-                bondVlessLink = config.bondVlessLink
+                bondVlessLink = config.bondVlessLink,
+                bondedRoomConfigs = config.bondedRoomConfigs
             ).normalized()
         }
 

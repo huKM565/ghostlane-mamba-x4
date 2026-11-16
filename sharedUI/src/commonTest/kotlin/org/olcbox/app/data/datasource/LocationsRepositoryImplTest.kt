@@ -2330,6 +2330,77 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun importsVkAndTelemostFourRoomBondsThroughRoomsHeader() = runTest {
+        val key = "a".repeat(64)
+        val vless = "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000" +
+            "?security=none&encryption=none#VLESS"
+        val input = """
+            olcrtc://vkcalls?vp8channel@v1#$key${'$'}VK 4x
+            ##rooms: v2, v3, v4
+            ##bond-vless: $vless
+            olcrtc://telemost?vp8channel@t1#$key${'$'}Telemost 4x
+            ##rooms: t2, t3, t4
+            ##bond-vless: $vless
+        """.trimIndent()
+        val source = FakeLocationsDataSource()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(input))
+
+        val locations = source.stored!!.locations.map { it.location }
+        assertEquals(listOf("v1", "v2", "v3", "v4"), locations[0].bondedPaths().map { it.room })
+        assertEquals(List(4) { "vkcalls" }, locations[0].bondedPaths().map { it.provider })
+        assertEquals(listOf("t1", "t2", "t3", "t4"), locations[1].bondedPaths().map { it.room })
+        assertEquals(List(4) { "telemost" }, locations[1].bondedPaths().map { it.provider })
+    }
+
+    @Test
+    fun importsMixedTwelveRoomBondInSubscriptionOrder() = runTest {
+        val source = FakeLocationsDataSource()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(multiBody()))
+
+        val entry = source.stored!!.locations.single()
+        val paths = entry.location.bondedPaths()
+        assertEquals(12, paths.size)
+        assertEquals(
+            List(4) { "jitsi" } + List(4) { "vkcalls" } + List(4) { "telemost" },
+            paths.map { it.provider }
+        )
+        assertEquals(List(4) { "datachannel" } + List(8) { "vp8channel" }, paths.map { it.transport })
+        assertEquals(paths, LocationEntry.from("copy", entry.location).location.bondedPaths())
+    }
+
+    @Test
+    fun malformedMultiRefreshPreservesTheSavedProfile() = runTest {
+        val url = "https://example.test/multi"
+        var body = multiBody()
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(body) }))
+        assertTrue(repo.importText(url))
+        val before = source.stored!!.locations.single().location.bondedPaths()
+        body = body.lines().filterIndexed { index, _ -> index != 11 }.joinToString("\n")
+
+        val report = repo.refreshSubscription(url)
+
+        assertEquals(0, report.updatedCount)
+        assertEquals(before, source.stored!!.locations.single().location.bondedPaths())
+    }
+
+    private fun multiBody(): String {
+        val paths = buildList {
+            (1..4).forEach { add("olcrtc://jitsi?datachannel@m$it#${"a".repeat(64)}") }
+            (1..4).forEach { add("olcrtc://vkcalls?vp8channel@https://vk.ru/call/join/v$it#${"b".repeat(64)}") }
+            (1..4).forEach { add("olcrtc://telemost?vp8channel@https://telemost.yandex.ru/j/t$it#${"c".repeat(64)}") }
+        }
+        return buildString {
+            append(paths.first()).append("${'$'}Германия — Multi 12x\n")
+            paths.drop(1).forEach { append("##bond-room: ").append(it).append('\n') }
+            append("##bond-vless: vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000")
+            append("?security=none&encryption=none#VLESS")
+        }
+    }
+
+    @Test
     fun importsBondedMambaAndSeparateVkCalls() = runTest {
         val source = FakeLocationsDataSource()
         val key = "a".repeat(64)

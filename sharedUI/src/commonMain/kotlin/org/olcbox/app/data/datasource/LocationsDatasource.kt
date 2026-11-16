@@ -36,6 +36,7 @@ import org.olcbox.app.data.device.deviceDescription
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.DeviceRefusal
+import org.olcbox.app.data.model.BondRoomConfig
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
@@ -1631,8 +1632,9 @@ class LocationsRepositoryImpl(
         if (!text.contains(OLCRTC_URI_PREFIX)) return null
 
         val subscriptionFields = linkedMapOf<String, String>()
-        val locations = mutableListOf<Pair<ParsedOlcRtcUri, MutableMap<String, String>>>()
+        val locations = mutableListOf<Triple<ParsedOlcRtcUri, MutableMap<String, String>, MutableList<BondRoomConfig>>>()
         var localFields: MutableMap<String, String>? = null
+        var localBondRooms: MutableList<BondRoomConfig>? = null
 
         text.lineSequence()
             .map { it.normalizedImportText() }
@@ -1642,8 +1644,10 @@ class LocationsRepositoryImpl(
                     line.startsWith(OLCRTC_URI_PREFIX) -> {
                         parseOlcRtcUri(line)?.let { parsed ->
                             val fields = linkedMapOf<String, String>()
-                            locations += parsed to fields
+                            val bondRooms = mutableListOf<BondRoomConfig>()
+                            locations += Triple(parsed, fields, bondRooms)
                             localFields = fields
+                            localBondRooms = bondRooms
                         }
                     }
 
@@ -1652,7 +1656,21 @@ class LocationsRepositoryImpl(
                             line.removePrefix("##")
                         ) ?: return@forEach
 
-                        localFields?.set(key, value)
+                        if (key == "bond-room") {
+                            val parsed = value
+                                .takeIf { it.startsWith(OLCRTC_URI_PREFIX) }
+                                ?.let(::parseOlcRtcUri)
+                            if (parsed == null) {
+                                localFields?.set("invalid-bond-room", "true")
+                            } else {
+                                val room = parsed.location
+                                localBondRooms?.add(
+                                    BondRoomConfig(room.id, room.key, room.bypassProvider, room.transport)
+                                )
+                            }
+                        } else {
+                            localFields?.set(key, value)
+                        }
                     }
 
                     line.startsWith("#") -> {
@@ -1671,21 +1689,29 @@ class LocationsRepositoryImpl(
             .withSubscriptionInterval(updateIntervalHours)
         val usedStorageIds = mutableSetOf<String>()
 
-        val entries = locations.mapIndexedNotNull { index, (parsed, fields) ->
+        val entries = locations.mapIndexedNotNull { index, (parsed, fields, bondRooms) ->
+            if (fields.containsKey("invalid-bond-room")) return@mapIndexedNotNull null
             val metadata = buildLocationMetadata(
                 fields = fields,
                 mimo = parsed.mimo,
                 subscription = subscriptionMetadata,
                 requestedTransport = parsed.requestedTransport
             )
-            val location = parsed.location.copy(
+            val primary = parsed.location
+            val explicitPaths = if (bondRooms.isEmpty()) {
+                emptyList()
+            } else {
+                listOf(BondRoomConfig(primary.id, primary.key, primary.bypassProvider, primary.transport)) + bondRooms
+            }
+            val location = primary.copy(
                 name = firstNotBlank(
                     metadata?.name,
                     parsed.mimo,
-                    parsed.location.name
+                    primary.name
                 ),
                 failoverRoomIds = parseFailoverRooms(fields["rooms"]),
-                bondVlessLink = fields["bond-vless"]?.trim()?.takeIf { it.isNotBlank() }
+                bondVlessLink = fields["bond-vless"]?.trim()?.takeIf { it.isNotBlank() },
+                bondedRoomConfigs = explicitPaths
             ).normalized()
             if (!location.isComplete()) return@mapIndexedNotNull null
             val base = location.storageSlug().ifBlank { "location_${index + 1}" }

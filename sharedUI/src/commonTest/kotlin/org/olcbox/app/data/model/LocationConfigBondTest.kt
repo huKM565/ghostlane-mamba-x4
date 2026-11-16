@@ -65,6 +65,76 @@ class LocationConfigBondTest {
         assertEquals(listOf("room-1", "room-2", "room-3", "room-4"), entry.location.bondedRooms())
     }
 
+    @Test
+    fun legacyBondExpandsToFourPaths() {
+        val paths = bondedConfig().bondedPaths()
+
+        assertEquals(listOf("room-1", "room-2", "room-3", "room-4"), paths.map { it.room })
+        assertEquals(List(4) { LocationConfig.PROVIDER_JITSI }, paths.map { it.provider })
+        assertEquals(List(4) { LocationConfig.TRANSPORT_DATACHANNEL }, paths.map { it.transport })
+        assertEquals(List(4) { "a".repeat(64) }, paths.map { it.key })
+    }
+
+    @Test
+    fun explicitMixedBondSurvivesNormalizationJsonAndLocationEntry() {
+        val config = bondedConfig().copy(bondedRoomConfigs = mixedPaths())
+        val decoded = Json.decodeFromString(
+            LocationConfig.serializer(),
+            Json.encodeToString(LocationConfig.serializer(), config)
+        )
+        val entry = LocationEntry.from("multi-12", decoded).normalized()
+
+        assertTrue(entry.location.isComplete())
+        assertEquals(mixedPaths(), entry.location.bondedPaths())
+        assertEquals(
+            List(4) { "jitsi" } + List(4) { "vkcalls" } + List(4) { "telemost" },
+            entry.location.bondedPaths().map { it.provider }
+        )
+        assertEquals(
+            List(4) { "datachannel" } + List(8) { "vp8channel" },
+            entry.location.bondedPaths().map { it.transport }
+        )
+    }
+
+    @Test
+    fun explicitBondRejectsWrongSizesDuplicateRoomsAndBlankKeys() {
+        assertFalse(bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(3)).isComplete())
+        assertFalse(bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(5)).isComplete())
+        assertFalse(
+            bondedConfig().copy(
+                bondedRoomConfigs = mixedPaths().mapIndexed { index, path ->
+                    if (index == 11) mixedPaths()[10] else path
+                }
+            ).normalized().isComplete()
+        )
+        assertFalse(
+            bondedConfig().copy(
+                bondedRoomConfigs = mixedPaths().mapIndexed { index, path ->
+                    if (index == 4) path.copy(key = " ") else path
+                }
+            ).isComplete()
+        )
+    }
+
+    @Test
+    fun bondRequiresPlainTcpVless() {
+        assertFalse(bondedConfig(link = VLESS_LINK.replace("security=none", "security=tls")).isComplete())
+        assertFalse(bondedConfig(link = VLESS_LINK.replace("encryption=none", "type=ws&security=none")).isComplete())
+    }
+
+    private fun mixedPaths(): List<BondRoomConfig> {
+        val mamba = (1..4).map { index ->
+            BondRoomConfig("mamba-$index", "a".repeat(64), "jitsi", "datachannel")
+        }
+        val vk = (1..4).map { index ->
+            BondRoomConfig("https://vk.ru/call/join/v$index", "b".repeat(64), "vkcalls", "vp8channel")
+        }
+        val telemost = (1..4).map { index ->
+            BondRoomConfig("https://telemost.yandex.ru/j/t$index", "c".repeat(64), "telemost", "vp8channel")
+        }
+        return mamba + vk + telemost
+    }
+
     private fun bondedConfig(
         rooms: List<String> = listOf("room-1", "room-2", "room-3", "room-4"),
         link: String? = VLESS_LINK,
