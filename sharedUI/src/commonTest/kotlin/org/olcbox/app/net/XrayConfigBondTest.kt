@@ -112,10 +112,34 @@ class XrayConfigBondTest {
         assertEquals(listOf("vless-room-1"), balancer["selector"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
 
+    @Test fun vlessBondBalancesAcrossTwelveRooms() {
+        val ports = (21081..21092).toList()
+        val root = Json.parseToJsonElement(
+            XrayConfig.buildVlessBond(spec, ports, "u", "p")
+        ).jsonObject
+
+        val balancer = root["routing"]!!.jsonObject["balancers"]!!.jsonArray.single().jsonObject
+        assertEquals(
+            (1..12).map { "vless-room-$it" },
+            balancer["selector"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(12, outbounds.count { it["protocol"]?.jsonPrimitive?.content == "vless" })
+        val socks = outbounds.filter { it["protocol"]?.jsonPrimitive?.content == "socks" }
+        assertEquals(12, socks.size)
+        assertEquals(
+            ports,
+            socks.map {
+                it["settings"]!!.jsonObject["servers"]!!.jsonArray.single().jsonObject["port"]!!
+                    .jsonPrimitive.content.toInt()
+            }
+        )
+    }
+
     @Test fun vlessBondRejectsEmptyDuplicateOrTooManyPorts() {
         val invalid = listOf(
             emptyList(),
-            listOf(21081, 21082, 21083, 21084, 21085),
+            (21081..21093).toList(),
             listOf(21081, 21082, 21082, 21084),
         )
         for (ports in invalid) {
