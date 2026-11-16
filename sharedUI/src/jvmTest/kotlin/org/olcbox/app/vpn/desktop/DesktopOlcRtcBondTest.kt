@@ -52,6 +52,15 @@ class DesktopOlcRtcBondTest {
     }
 
     @Test
+    fun parsesOnlyStructuredRoomOccupancyEvents() {
+        assertEquals(6, parseOlcRtcRoomParticipants("2026/11/16 16:02:32 jitsi: room participants=6"))
+        assertEquals(2, parseOlcRtcRoomParticipants("jitsi: room participants=2"))
+        assertEquals(null, parseOlcRtcRoomParticipants("jitsi: bridge open sctp"))
+        assertEquals(0, parseOlcRtcRoomParticipants("jitsi: room participants=0"))
+        assertEquals(null, parseOlcRtcRoomParticipants("jitsi: room participants=-1"))
+    }
+
+    @Test
     fun recoverRestartsAndReturnsTheMissingRoom() {
         val rooms = rooms(4)
         val replacement = FakeProcess(44)
@@ -64,6 +73,13 @@ class DesktopOlcRtcBondTest {
         assertEquals(listOf(0, 1, 2, 3), active)
         assertEquals(replacement, stopped.process)
         assertEquals(listOf(21081, 21082, 21083, 21084), bond.ports())
+    }
+
+    @Test
+    fun singleEngineIsMissingOnlyWithoutBothProcessAndBond() {
+        assertTrue(desktopOlcRtcProcessMissing(null, null))
+        assertFalse(desktopOlcRtcProcessMissing(FakeProcess(1), null))
+        assertFalse(desktopOlcRtcProcessMissing(null, DesktopOlcRtcBond(rooms(4))))
     }
 
     @Test

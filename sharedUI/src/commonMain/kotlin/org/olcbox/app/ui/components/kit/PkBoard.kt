@@ -287,7 +287,8 @@ fun PkRoomCard(
      * screen the admin gate hides.
      */
     trailing: (@Composable () -> Unit)? = null,
-    bondRooms: List<Boolean>? = null
+    bondRooms: List<Boolean>? = null,
+    bondRoomOccupants: List<Int?>? = null
 ) {
     val palette = LocalPkPalette.current
     val background by animateColorAsState(
@@ -436,12 +437,19 @@ fun PkRoomCard(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 bondRooms.forEachIndexed { index, active ->
                     val room = index + 1
+                    val participants = bondRoomOccupants?.getOrNull(index)
+                    val participantsSuffix = if (bondRoomOccupants == null) "" else "·${participants?.toString() ?: "—"}"
                     Text(
-                        text = "$room",
+                        text = "$room$participantsSuffix",
                         style = pkMono(10, 0.4),
                         color = if (active) Color(0xFF22C55E) else Color(0xFFEF4444),
                         modifier = Modifier.semantics {
-                            contentDescription = "Room $room: ${if (active) "active" else "inactive"}"
+                            contentDescription = if (bondRoomOccupants == null) {
+                                "Room $room: ${if (active) "active" else "inactive"}"
+                            } else {
+                                "Room $room: ${if (active) "active" else "inactive"}, " +
+                                    (participants?.let { "$it participants" } ?: "participants unknown")
+                            }
                         }
                     )
                 }

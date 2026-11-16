@@ -108,6 +108,7 @@ class HomeScreenViewModel(
      */
     val connectedSince get() = vpnManager.connectedSince
     val bondRooms get() = vpnManager.bondRooms
+    val bondRoomOccupants get() = vpnManager.bondRoomOccupants
 
     /**
      * The session's traffic: its totals and the chart of its last seconds.

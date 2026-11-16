@@ -13,6 +13,14 @@ enum class DesktopBondWatchDecision {
 fun desktopBondNeedsRefresh(active: List<Int>, balanced: List<Int>): Boolean =
     active != balanced || active.size < 4
 
+private val olcRtcRoomParticipants = Regex("""\bjitsi: room participants=(\d+)\s*$""")
+
+fun parseOlcRtcRoomParticipants(line: String): Int? =
+    olcRtcRoomParticipants.find(line)?.groupValues?.get(1)?.toIntOrNull()
+
+fun desktopOlcRtcProcessMissing(process: Process?, bond: DesktopOlcRtcBond?): Boolean =
+    process == null && bond == null
+
 fun desktopBondWatchDecision(
     coresAlive: Boolean,
     activeRooms: List<Int>?,
@@ -40,7 +48,7 @@ class DesktopOlcRtcBond(
     }
 
     data class Room(
-        var process: Process,
+        @Volatile var process: Process,
         val configPath: Path,
         val port: Int,
         val restart: (() -> Process)? = null,

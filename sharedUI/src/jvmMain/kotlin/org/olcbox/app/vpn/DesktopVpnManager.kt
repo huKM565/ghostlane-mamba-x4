@@ -87,6 +87,8 @@ import org.olcbox.app.vpn.desktop.DesktopOlcRtcBond
 import org.olcbox.app.vpn.desktop.DesktopBondWatchDecision
 import org.olcbox.app.vpn.desktop.desktopBondWatchDecision
 import org.olcbox.app.vpn.desktop.desktopBondWatchDecisionAfterRefresh
+import org.olcbox.app.vpn.desktop.desktopOlcRtcProcessMissing
+import org.olcbox.app.vpn.desktop.parseOlcRtcRoomParticipants
 import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -128,6 +130,28 @@ class DesktopVpnManager private constructor(
 
     private val _bondRooms = MutableStateFlow<List<Boolean>?>(null)
     override val bondRooms: StateFlow<List<Boolean>?> = _bondRooms.asStateFlow()
+
+    private val _bondRoomOccupants = MutableStateFlow<List<Int?>?>(null)
+    override val bondRoomOccupants: StateFlow<List<Int?>?> = _bondRoomOccupants.asStateFlow()
+
+    private var desktopBondGeneration = 0L
+
+    @Synchronized
+    private fun setDesktopBondRooms(activeIndexes: List<Int>?) {
+        _bondRooms.value = activeIndexes?.let { active -> List(4) { it in active } }
+        _bondRoomOccupants.value = activeIndexes?.let { active ->
+            val previous = _bondRoomOccupants.value
+            List(4) { index -> previous?.getOrNull(index)?.takeIf { index in active } }
+        }
+    }
+
+    @Synchronized
+    private fun setDesktopBondRoomOccupant(index: Int, participants: Int) {
+        if (index !in 0..3 || _bondRooms.value?.getOrNull(index) != true) return
+        val updated = (_bondRoomOccupants.value ?: List<Int?>(4) { null }).toMutableList()
+        updated[index] = participants.takeIf { it > 0 }
+        _bondRoomOccupants.value = updated
+    }
 
     /**
      * A tunnel session is counted by whoever owns its tunnel, a proxy session
@@ -1025,16 +1049,32 @@ class DesktopVpnManager private constructor(
             }
 
             if (isOlcrtc) {
-                val olcRtcProcess = process ?: error("olcRTC process is missing")
-                if (!olcRtcProcess.isAlive) {
-                    error("olcRTC exited before desktop proxy was enabled")
+                val olcRtcProcess = process
+                if (desktopOlcRtcProcessMissing(olcRtcProcess, desktopOlcRtcBond)) {
+                    error("olcRTC process is missing")
                 }
-                startProcessExitWatchers(
-                    desktopMode = desktopMode,
-                    olcRtcProcess = olcRtcProcess,
-                    currentTunProcess = tunProcess,
-                    requestGeneration = requestGeneration
-                )
+                if (olcRtcProcess != null) {
+                    if (!olcRtcProcess.isAlive) {
+                        error("olcRTC exited before desktop proxy was enabled")
+                    }
+                    startProcessExitWatchers(
+                        desktopMode = desktopMode,
+                        olcRtcProcess = olcRtcProcess,
+                        currentTunProcess = tunProcess,
+                        requestGeneration = requestGeneration
+                    )
+                } else {
+                    if (desktopOlcRtcBond?.isRunning() != true) {
+                        error("olcRTC bond exited before desktop proxy was enabled")
+                    }
+                    when (desktopMode) {
+                        DesktopMode.LinuxTun,
+                        DesktopMode.WindowsTun -> startTunExitWatcher(
+                            tunProcess ?: error("TUN process is missing")
+                        )
+                        else -> Unit
+                    }
+                }
             } else {
                 if (!singBoxCore.isRunning() && !xrayCore.isRunning()) {
                     error("core exited before desktop proxy was enabled")
@@ -1684,6 +1724,8 @@ class DesktopVpnManager private constructor(
         require(rooms.size == 4) { "a bonded desktop location requires four rooms" }
         stopDesktopBond()
         stopDesktopCores()
+        setDesktopBondRooms(List(4) { it })
+        val launchGeneration = desktopBondGeneration
         val started = mutableListOf<DesktopOlcRtcBond.Room>()
         try {
             val binary = DesktopNativeAssets.resolveOlcRtcBinary()
@@ -1714,7 +1756,16 @@ class DesktopVpnManager private constructor(
                     val launched = builder.start()
                     scope.launch {
                         launched.inputStream.bufferedReader().useLines { lines ->
-                            lines.forEach { line -> addLog("rtc: $line") }
+                            lines.forEach { line ->
+                                addLog("rtc: $line")
+                                val participants = parseOlcRtcRoomParticipants(line)
+                                val currentProcess = desktopOlcRtcBond?.rooms?.getOrNull(index)?.process
+                                if (participants != null && launchGeneration == desktopBondGeneration &&
+                                    (currentProcess == null || currentProcess === launched)
+                                ) {
+                                    setDesktopBondRoomOccupant(index, participants)
+                                }
+                            }
                         }
                     }
                     return launched
@@ -1730,7 +1781,7 @@ class DesktopVpnManager private constructor(
             if (!bond.isRunning()) error("fewer than three bonded olcRTC rooms are ready")
             desktopOlcRtcBond = bond
             desktopBalancedRooms = bond.activeIndexes()
-            _bondRooms.value = List(4) { it in desktopBalancedRooms }
+            setDesktopBondRooms(desktopBalancedRooms)
 
             val spec = LinkParser.parse(config.bondVlessLink!!) as? OutboundSpec.Vless
                 ?: error("bond carrier is not VLESS")
@@ -1784,14 +1835,14 @@ class DesktopVpnManager private constructor(
     private suspend fun refreshDesktopBond(line: SessionLine): Boolean {
         val bond = desktopOlcRtcBond ?: return true
         var activeRooms = bond.activeIndexes()
-        _bondRooms.value = List(4) { it in activeRooms }
+        setDesktopBondRooms(activeRooms)
         if (activeRooms.size < 3) return false
         if (activeRooms != desktopBalancedRooms && !rebalanceDesktopBond(line, bond, activeRooms)) {
             return false
         }
 
         activeRooms = recoverDesktopBondRooms(bond)
-        _bondRooms.value = List(4) { it in activeRooms }
+        setDesktopBondRooms(activeRooms)
         if (activeRooms.size < 3) return false
         if (activeRooms == desktopBalancedRooms) return true
         return rebalanceDesktopBond(line, bond, activeRooms)
@@ -1865,10 +1916,11 @@ class DesktopVpnManager private constructor(
         desktopOlcRtcBond?.isRunning() ?: (process?.isAlive == true)
 
     private fun stopDesktopBond() {
+        desktopBondGeneration++
         val bond = desktopOlcRtcBond
         desktopOlcRtcBond = null
         desktopBalancedRooms = emptyList()
-        _bondRooms.value = null
+        setDesktopBondRooms(null)
         if (bond != null) {
             runCatching { bond.stop() }.onFailure { addLog("Desktop olcRTC bond stop failed: ${it.message}") }
             bond.deleteConfigs()

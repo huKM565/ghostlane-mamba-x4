@@ -34,8 +34,24 @@ object OlcboxVpnState {
     private val _bondRooms = MutableStateFlow<List<Boolean>?>(null)
     val bondRooms = _bondRooms.asStateFlow()
 
+    private val _bondRoomOccupants = MutableStateFlow<List<Int?>?>(null)
+    val bondRoomOccupants = _bondRoomOccupants.asStateFlow()
+
+    @Synchronized
     fun setBondRooms(activeIndexes: List<Int>?) {
         _bondRooms.value = activeIndexes?.let { active -> List(4) { it in active } }
+        _bondRoomOccupants.value = activeIndexes?.let { active ->
+            val previous = _bondRoomOccupants.value
+            List(4) { index -> previous?.getOrNull(index)?.takeIf { index in active } }
+        }
+    }
+
+    @Synchronized
+    fun setBondRoomOccupant(index: Int, participants: Int) {
+        if (index !in 0..3 || _bondRooms.value?.getOrNull(index) != true) return
+        val updated = (_bondRoomOccupants.value ?: List<Int?>(4) { null }).toMutableList()
+        updated[index] = participants.takeIf { it > 0 }
+        _bondRoomOccupants.value = updated
     }
 
     private val _connectedSince = MutableStateFlow<Long?>(null)

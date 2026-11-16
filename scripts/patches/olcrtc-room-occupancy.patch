@@ -1,0 +1,444 @@
+diff --git a/internal/client/client.go b/internal/client/client.go
+index 51fedb70..890ccf1e 100644
+--- a/internal/client/client.go
++++ b/internal/client/client.go
+@@ -258,6 +258,9 @@ type Config struct {
+ 	// established: on the initial connect and after every reconnect. A host
+ 	// that cannot read the log learns of a room handover this way.
+ 	OnSessionOpen SessionOpenFunc
++	// OnOccupancy reports the current number of room participants when the provider knows it.
++	// ai-generated: the room occupancy callback.
++	OnOccupancy func(participants int)
+ 	// EndOnEmptyRoom makes Run return once a reconnect handshake fails with
+ 	// nothing in the room having sent a frame while it ran - the shape of a
+ 	// room whose server has been retired. Set it when something above the
+diff --git a/internal/client/link.go b/internal/client/link.go
+index 95a55d88..2ea85a25 100644
+--- a/internal/client/link.go
++++ b/internal/client/link.go
+@@ -845,7 +845,7 @@ func (c *Client) sessionSnapshot() (*smux.Session, string, <-chan struct{}) {
+ // ai-generated: this function and its DefaultICE.
+ func (c *Client) linkRole(cfg Config) tunnelcore.LinkRoleConfig {
+ 	return tunnelcore.LinkRoleConfig{
+-		DeviceID: c.deviceID, OnData: c.onData, OnDatagram: c.onDatagram, Resolver: cfg.Resolver,
++		DeviceID: c.deviceID, OnData: c.onData, OnDatagram: c.onDatagram, OnOccupancy: cfg.OnOccupancy, Resolver: cfg.Resolver,
+ 		RequireTargetedPeer: true,
+ 		DefaultICE:          roomhint.ICETCP,
+ 	}
+diff --git a/internal/engine/builtin/builtin.go b/internal/engine/builtin/builtin.go
+index 09cf37b9..36137df0 100644
+--- a/internal/engine/builtin/builtin.go
++++ b/internal/engine/builtin/builtin.go
+@@ -49,6 +49,7 @@ type Config struct {
+ 	Name                string
+ 	OnData              func([]byte)
+ 	OnPeerData          func(peerID string, data []byte)
++	OnOccupancy         func(participants int) // ai-generated: the room occupancy callback.
+ 	OnDatagram          func([]byte)
+ 	OnPeerDatagram      func(peerID string, data []byte)
+ 	DNSServer           string
+@@ -172,6 +173,7 @@ func engineConfig(
+ 		Name:                cfg.Name,
+ 		OnData:              cfg.OnData,
+ 		OnPeerData:          cfg.OnPeerData,
++		OnOccupancy:         cfg.OnOccupancy,
+ 		OnDatagram:          cfg.OnDatagram,
+ 		OnPeerDatagram:      cfg.OnPeerDatagram,
+ 		DNSServer:           cfg.DNSServer,
+diff --git a/internal/engine/builtin/icelocal_test.go b/internal/engine/builtin/icelocal_test.go
+index e82ff063..5a76524c 100644
+--- a/internal/engine/builtin/icelocal_test.go
++++ b/internal/engine/builtin/icelocal_test.go
+@@ -21,6 +21,14 @@ func TestEngineConfigCarriesTheICELocalIP(t *testing.T) {
+ 	}
+ }
+ 
++// ai-generated: the room occupancy callback crosses the provider config.
++func TestEngineConfigCarriesTheOccupancyCallback(t *testing.T) {
++	got := engineConfig(Config{OnOccupancy: func(int) {}}, engine.Credentials{URL: "u"}, nil)
++	if got.OnOccupancy == nil {
++		t.Fatal("engine config dropped OnOccupancy")
++	}
++}
++
+ // Every carrier builds its pion settings through the session's helper
+ // (engine.Config.Pion().Options or a PionSession it was handed), so a session
+ // field such as the ICE local IP reaches every carrier and none is left behind.
+diff --git a/internal/engine/engine.go b/internal/engine/engine.go
+index 506208b1..d740d4c7 100644
+--- a/internal/engine/engine.go
++++ b/internal/engine/engine.go
+@@ -51,6 +51,9 @@ type Config struct {
+ 	Extra      map[string]string
+ 	OnData     func([]byte)
+ 	OnPeerData func(peerID string, data []byte)
++	// OnOccupancy reports the current number of room participants when the engine knows it.
++	// ai-generated: the room occupancy callback.
++	OnOccupancy func(participants int)
+ 	// OnDatagram receives unordered, lossy datagram payloads. Unlike OnData
+ 	// they never pass through smux and the room may drop them.
+ 	OnDatagram     func([]byte)
+diff --git a/internal/engine/jitsi/jitsi.go b/internal/engine/jitsi/jitsi.go
+index a9280478..c6fc5aec 100644
+--- a/internal/engine/jitsi/jitsi.go
++++ b/internal/engine/jitsi/jitsi.go
+@@ -76,6 +76,7 @@ type Session struct {
+ 
+ 	onData              func([]byte)
+ 	onPeerData          func(peerID string, data []byte)
++	occupancy           occupancyReporter // ai-generated: MUC roster reporting.
+ 	requireTargetedPeer bool
+ 	jSess               atomic.Pointer[j.Session]
+ 	jSessMu             sync.Mutex
+@@ -192,6 +193,7 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
+ 		httpClient:          protect.NewHTTPClient(cfg.Resolver),
+ 		onData:              cfg.OnData,
+ 		onPeerData:          cfg.OnPeerData,
++		occupancy:           occupancyReporter{last: -1, onChange: cfg.OnOccupancy},
+ 		requireTargetedPeer: cfg.RequireTargetedPeer,
+ 		sendQueue:           make(chan []byte, defaultSendQueueSize),
+ 		peerQueues:          make(map[string]*peerQueue),
+@@ -266,6 +268,8 @@ func (s *Session) Connect(ctx context.Context) error {
+ 	s.setJSession(jSess)
+ 	logger.Infof("jitsi: MUC joined %s/%s; waiting for peer …", s.host, s.room)
+ 
++	s.reportOccupancy()
++	s.goLaunch(s.watchOccupancy)
+ 	s.goLaunch(s.sendLoop)
+ 	s.goLaunch(s.recvLoop)
+ 	s.goLaunch(s.waitForJingle)
+diff --git a/internal/engine/jitsi/occupancy.go b/internal/engine/jitsi/occupancy.go
+new file mode 100644
+index 00000000..9e9b76e5
+--- /dev/null
++++ b/internal/engine/jitsi/occupancy.go
+@@ -0,0 +1,59 @@
++package jitsi
++
++import (
++	"sync"
++	"time"
++
++	"github.com/openlibrecommunity/olcrtc/internal/logger"
++)
++
++// occupancyPollInterval is how often a live Jitsi session reads its MUC roster.
++// ai-generated: the room occupancy reporter and watcher in this file.
++const occupancyPollInterval = 2 * time.Second
++
++type occupancyReporter struct {
++	mu       sync.Mutex
++	last     int
++	onChange func(participants int)
++}
++
++func (r *occupancyReporter) report(participants int) {
++	r.mu.Lock()
++	if r.last == participants {
++		r.mu.Unlock()
++		return
++	}
++	r.last = participants
++	r.mu.Unlock()
++
++	logger.Infof("jitsi: room participants=%d", participants)
++	if r.onChange != nil {
++		r.onChange(participants)
++	}
++}
++
++func roomParticipants(endpoints []string) int {
++	return len(endpoints) + 1
++}
++
++func (s *Session) reportOccupancy() {
++	jSess := s.jSess.Load()
++	if jSess == nil || jSess.Conn == nil {
++		s.occupancy.report(0)
++		return
++	}
++	s.occupancy.report(roomParticipants(endpointList(jSess)))
++}
++
++func (s *Session) watchOccupancy() {
++	ticker := time.NewTicker(occupancyPollInterval)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-s.done:
++			return
++		case <-ticker.C:
++			s.reportOccupancy()
++		}
++	}
++}
+diff --git a/internal/engine/jitsi/occupancy_test.go b/internal/engine/jitsi/occupancy_test.go
+new file mode 100644
+index 00000000..80b54fb2
+--- /dev/null
++++ b/internal/engine/jitsi/occupancy_test.go
+@@ -0,0 +1,57 @@
++// ai-generated: tests for the room occupancy reporter.
++package jitsi
++
++import (
++	"context"
++	"reflect"
++	"testing"
++
++	"github.com/openlibrecommunity/olcrtc/internal/engine"
++)
++
++func TestRoomParticipantsCountsTheLocalEndpoint(t *testing.T) {
++	if got := roomParticipants(nil); got != 1 {
++		t.Fatalf("participants without remote endpoints = %d, want 1", got)
++	}
++	if got := roomParticipants([]string{"relay", "other"}); got != 3 {
++		t.Fatalf("participants with two remote endpoints = %d, want 3", got)
++	}
++}
++
++func TestOccupancyReporterEmitsOnlyChanges(t *testing.T) {
++	var got []int
++	reporter := occupancyReporter{onChange: func(participants int) {
++		got = append(got, participants)
++	}}
++	for _, participants := range []int{1, 1, 2, 2, 1} {
++		reporter.report(participants)
++	}
++	if want := []int{1, 2, 1}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("occupancy events = %v, want %v", got, want)
++	}
++}
++
++func TestOccupancyWithoutAJitsiSessionIsUnknown(t *testing.T) {
++	var got []int
++	s := &Session{occupancy: occupancyReporter{last: -1, onChange: func(participants int) {
++		got = append(got, participants)
++	}}}
++	s.reportOccupancy()
++	if want := []int{0}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("occupancy without jSess = %v, want unknown %v", got, want)
++	}
++}
++
++func TestNewKeepsTheOccupancyCallback(t *testing.T) {
++	sess, err := New(context.Background(), engine.Config{
++		URL: testHost, Extra: map[string]string{credentialKeyRoom: testRoom},
++		OnOccupancy: func(int) {},
++	})
++	if err != nil {
++		t.Fatalf("New() error = %v", err)
++	}
++	t.Cleanup(func() { _ = sess.Close() })
++	if sess.(*Session).occupancy.onChange == nil {
++		t.Fatal("the Jitsi session dropped OnOccupancy")
++	}
++}
+diff --git a/internal/transport/transport.go b/internal/transport/transport.go
+index c738ed57..4a050f27 100644
+--- a/internal/transport/transport.go
++++ b/internal/transport/transport.go
+@@ -238,6 +238,9 @@ type Config struct {
+ 	Name          string
+ 	OnData        func([]byte)
+ 	OnPeerData    func(peerID string, data []byte)
++	// OnOccupancy reports the current number of room participants when the provider knows it.
++	// ai-generated: the room occupancy callback.
++	OnOccupancy func(participants int)
+ 	// OnDatagram and OnPeerDatagram receive the lossy datagram lane; a
+ 	// transport without one never calls them.
+ 	OnDatagram     func([]byte)
+@@ -281,6 +284,7 @@ func (c Config) EngineConfig() enginebuiltin.Config {
+ 		Name:                c.Name,
+ 		OnData:              c.OnData,
+ 		OnPeerData:          c.OnPeerData,
++		OnOccupancy:         c.OnOccupancy,
+ 		OnDatagram:          c.OnDatagram,
+ 		OnPeerDatagram:      c.OnPeerDatagram,
+ 		DNSServer:           c.DNSServer,
+diff --git a/internal/tunnelcore/transport.go b/internal/tunnelcore/transport.go
+index 95ba350d..285d1780 100644
+--- a/internal/tunnelcore/transport.go
++++ b/internal/tunnelcore/transport.go
+@@ -30,6 +30,7 @@ type LinkRoleConfig struct {
+ 	DeviceID            string
+ 	OnData              func([]byte)
+ 	OnPeerData          func(string, []byte)
++	OnOccupancy         func(int) // ai-generated: the room occupancy callback.
+ 	OnDatagram          func([]byte)
+ 	OnPeerDatagram      func(string, []byte)
+ 	Resolver            protect.Lookup
+@@ -55,6 +56,7 @@ func BuildTransportConfig(base LinkConfig, role LinkRoleConfig) transport.Config
+ 		Name:                names.Generate(),
+ 		OnData:              role.OnData,
+ 		OnPeerData:          role.OnPeerData,
++		OnOccupancy:         role.OnOccupancy,
+ 		OnDatagram:          role.OnDatagram,
+ 		OnPeerDatagram:      role.OnPeerDatagram,
+ 		DNSServer:           base.DNSServer,
+diff --git a/internal/tunnelcore/transport_test.go b/internal/tunnelcore/transport_test.go
+index f0dedd1a..161d658a 100644
+--- a/internal/tunnelcore/transport_test.go
++++ b/internal/tunnelcore/transport_test.go
+@@ -12,19 +12,20 @@ func TestBuildTransportConfigPreservesRoleFields(t *testing.T) {
+ 	resolver := &net.Resolver{PreferGo: true}
+ 	onData := func([]byte) {}
+ 	onPeerData := func(string, []byte) {}
++	onOccupancy := func(int) {}
+ 	cfg := BuildTransportConfig(LinkConfig{
+ 		Provider: "provider", RoomURL: "room", Engine: "engine", URL: "url",
+ 		Token: "token", ProviderToken: "auth-token", ChannelID: "channel",
+ 		DNSServer: "dns", Traffic: transport.TrafficConfig{MaxPayloadSize: 4096},
+ 	}, LinkRoleConfig{
+-		DeviceID: "device", OnData: onData, OnPeerData: onPeerData,
++		DeviceID: "device", OnData: onData, OnPeerData: onPeerData, OnOccupancy: onOccupancy,
+ 		Resolver: resolver, ProxyAddr: "proxy", ProxyPort: 1080,
+ 		RequireTargetedPeer: true, DefaultICE: "tcp",
+ 	})
+ 	if cfg.DeviceID != "device" || cfg.Resolver != resolver || !cfg.RequireTargetedPeer || cfg.DefaultICE != "tcp" {
+ 		t.Fatalf("role config = %+v", cfg)
+ 	}
+-	if cfg.OnData == nil || cfg.OnPeerData == nil || cfg.ProxyAddr != "proxy" || cfg.ProxyPort != 1080 {
++	if cfg.OnData == nil || cfg.OnPeerData == nil || cfg.OnOccupancy == nil || cfg.ProxyAddr != "proxy" || cfg.ProxyPort != 1080 {
+ 		t.Fatalf("role callbacks/proxy = %+v", cfg)
+ 	}
+ 	if cfg.Provider != "provider" || cfg.RoomURL != "room" || cfg.Traffic.MaxPayloadSize != 4096 {
+diff --git a/mobile/listener.go b/mobile/listener.go
+index 82ac7ecd..409cc3a7 100644
+--- a/mobile/listener.go
++++ b/mobile/listener.go
+@@ -42,3 +42,29 @@ func (r *Runtime) notifySessionOpened(gen *runGeneration, room, sessionID string
+ 	}
+ 	listener.OnSessionOpened(room, sessionID)
+ }
++
++// OccupancyListener receives the current number of participants in a Jitsi room.
++// The count includes the local endpoint and excludes the service focus user.
++// ai-generated: the room occupancy listener interface and delivery below.
++type OccupancyListener interface {
++	OnRoomOccupancyChanged(room string, participants int)
++}
++
++// SetOccupancyListener installs the roster listener for this Runtime.
++func (r *Runtime) SetOccupancyListener(l OccupancyListener) {
++	r.mu.Lock()
++	r.occupancyListener = l
++	r.mu.Unlock()
++}
++
++// notifyRoomOccupancy drops events from a generation that is already stopping.
++func (r *Runtime) notifyRoomOccupancy(gen *runGeneration, room string, participants int) {
++	r.mu.Lock()
++	listener := r.occupancyListener
++	live := r.isCurrentGenerationLocked(gen) && !gen.stopRequested
++	r.mu.Unlock()
++	if listener == nil || !live {
++		return
++	}
++	listener.OnRoomOccupancyChanged(room, participants)
++}
+diff --git a/mobile/listener_test.go b/mobile/listener_test.go
+index a177744d..b0d3b6e8 100644
+--- a/mobile/listener_test.go
++++ b/mobile/listener_test.go
+@@ -4,6 +4,7 @@ package mobile
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	"reflect"
+ 	"sync"
+ 	"testing"
+@@ -112,6 +113,47 @@ func TestSessionListenerIgnoresAStoppingGeneration(t *testing.T) {
+ 	}
+ }
+ 
++// ai-generated: the host receives roster counts without parsing engine logs.
++func TestOccupancyListenerReceivesRoomCounts(t *testing.T) {
++	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
++		cfg.OnOccupancy(3)
++		onReady("127.0.0.1:1080")
++		<-ctx.Done()
++		return ctx.Err()
++	})
++	listener := &recordingOccupancyListener{}
++	runtime.SetOccupancyListener(listener)
++	if err := runtime.Start(); err != nil {
++		t.Fatalf("Start() error = %v", err)
++	}
++	if err := runtime.WaitReady(2000); err != nil {
++		t.Fatalf("WaitReady() error = %v", err)
++	}
++	if got, want := listener.events(), []string{testRoom + " 3"}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("occupancy events = %v, want %v", got, want)
++	}
++	if err := runtime.Stop(100); err != nil {
++		t.Fatalf("Stop() error = %v", err)
++	}
++}
++
++type recordingOccupancyListener struct {
++	mu       sync.Mutex
++	received []string
++}
++
++func (l *recordingOccupancyListener) OnRoomOccupancyChanged(room string, participants int) {
++	l.mu.Lock()
++	l.received = append(l.received, fmt.Sprintf("%s %d", room, participants))
++	l.mu.Unlock()
++}
++
++func (l *recordingOccupancyListener) events() []string {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	return append([]string(nil), l.received...)
++}
++
+ type recordingListener struct {
+ 	mu     sync.Mutex
+ 	opened []string
+diff --git a/mobile/runtime.go b/mobile/runtime.go
+index d0854997..6419e49f 100644
+--- a/mobile/runtime.go
++++ b/mobile/runtime.go
+@@ -69,6 +69,9 @@ type Runtime struct {
+ 	runner         clientRunner
+ 	// listener hears each session open; see SetSessionListener.
+ 	listener SessionListener
++	// occupancyListener hears MUC roster changes; see SetOccupancyListener.
++	// ai-generated: the room occupancy listener.
++	occupancyListener OccupancyListener
+ }
+ 
+ // New returns an idle Runtime with documented mobile defaults.
+@@ -165,6 +168,7 @@ func (r *Runtime) run(ctx context.Context, gen *runGeneration) {
+ 		cfg := gen.cfg
+ 		cfg.RoomURL = profile.RoomID
+ 		cfg.OnSessionOpen = func(sessionID string) { r.notifySessionOpened(gen, profile.RoomID, sessionID) }
++		cfg.OnOccupancy = func(participants int) { r.notifyRoomOccupancy(gen, profile.RoomID, participants) }
+ 		// A room nobody is in ends this run so the next one is tried, but
+ 		// only while there is a next one: with a single room, giving up
+ 		// would end the generation and leave the host holding a tunnel it
+diff --git a/pkg/olcrtc/client/client.go b/pkg/olcrtc/client/client.go
+index eef8af7e..4b555b0f 100644
+--- a/pkg/olcrtc/client/client.go
++++ b/pkg/olcrtc/client/client.go
+@@ -121,6 +121,9 @@ type Config struct {
+ 	// established; a host that cannot read the log learns of a room
+ 	// handover this way.
+ 	OnSessionOpen SessionOpenFunc
++	// OnOccupancy reports the current number of room participants when the provider knows it.
++	// ai-generated: the room occupancy callback.
++	OnOccupancy func(participants int)
+ 	// EndOnEmptyRoom ends the run when a reconnect handshake finds the room
+ 	// empty, instead of retrying in it for as long as the tunnel lives. Set
+ 	// it only when the caller has another room to try.
+@@ -186,6 +189,7 @@ func toClientConfig(cfg Config) internalclient.Config {
+ 		DeviceID: cfg.DeviceID, DeviceIDPath: cfg.DeviceIDPath, Claims: cfg.Claims,
+ 		OnHealth:       internalclient.HealthFunc(cfg.OnHealth),
+ 		OnSessionOpen:  internalclient.SessionOpenFunc(cfg.OnSessionOpen),
++		OnOccupancy:    cfg.OnOccupancy,
+ 		EndOnEmptyRoom: cfg.EndOnEmptyRoom,
+ 		UDPDisabled:    cfg.UDPDisabled, UDPMaxFlows: cfg.UDPMaxFlows,
+ 	}

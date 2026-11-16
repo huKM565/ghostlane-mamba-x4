@@ -60,6 +60,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import mobile.LogWriter
 import mobile.Mobile
+import mobile.OccupancyListener
 import mobile.Runtime as OlcrtcRuntime
 import mobile.SocketProtector
 import org.olcbox.app.data.TUN2SOCKS_CONFIG_FILE_NAME
@@ -1469,11 +1470,21 @@ class OlcboxVpnService : VpnService() {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
             val runtimes = rooms.map { Mobile.new_() }
-            runtimes.forEach { runtime -> installMobileCallbacks(runtime) }
             val bond = OlcRtcBond(runtimes.map(::GomobileOlcRtcBondRuntime))
             olcRtcBond = bond
+            runtimes.forEachIndexed { index, runtime ->
+                installMobileCallbacks(runtime)
+                runtime.setOccupancyListener(object : OccupancyListener {
+                    override fun onRoomOccupancyChanged(room: String?, participants: Long) {
+                        if (requestedGeneration == generation && bond === olcRtcBond) {
+                            OlcboxVpnState.setBondRoomOccupant(index, participants.toInt())
+                        }
+                    }
+                })
+            }
             bondRoomPorts = ports
             bondLocation = config
+            OlcboxVpnState.setBondRooms(listOf(0, 1, 2, 3))
             lastMobileProvider = config.bypassProvider
             val deviceId = deviceIdentityProvider.hwid().orEmpty()
             runtimes.forEachIndexed { index, runtime ->

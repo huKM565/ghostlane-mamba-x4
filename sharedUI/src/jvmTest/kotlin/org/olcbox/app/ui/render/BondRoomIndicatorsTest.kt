@@ -29,13 +29,21 @@ class BondRoomIndicatorsTest {
                 keyGone = false,
                 wire = "a Mamba media session",
                 bondRooms = listOf(true, true, false, true),
+                bondRoomOccupants = listOf(3, 2, null, 6),
                 onClick = {},
             )
         }) {
             for (room in listOf(1, 2, 4)) {
-                assertEquals(1, onAllNodesWithContentDescription("Room $room: active").fetchSemanticsNodes().size)
+                val participants = listOf(3, 2, 6)[listOf(1, 2, 4).indexOf(room)]
+                assertEquals(
+                    1,
+                    onAllNodesWithContentDescription("Room $room: active, $participants participants").fetchSemanticsNodes().size,
+                )
             }
-            assertEquals(1, onAllNodesWithContentDescription("Room 3: inactive").fetchSemanticsNodes().size)
+            assertEquals(
+                1,
+                onAllNodesWithContentDescription("Room 3: inactive, participants unknown").fetchSemanticsNodes().size,
+            )
         }
     }
 }

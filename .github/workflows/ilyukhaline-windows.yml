@@ -29,6 +29,11 @@ jobs:
           path: olcrtc
           submodules: recursive
 
+      - name: Apply IlyukhaLine olcRTC occupancy patch
+        shell: bash
+        working-directory: olcrtc
+        run: git apply ../ilyukhaline/scripts/patches/olcrtc-room-occupancy.patch
+
       - name: Setup JDK
         uses: actions/setup-java@v6
         with:
