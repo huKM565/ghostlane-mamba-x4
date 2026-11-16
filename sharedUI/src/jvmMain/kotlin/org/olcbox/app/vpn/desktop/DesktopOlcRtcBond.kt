@@ -18,6 +18,11 @@ private val olcRtcRoomParticipants = Regex("""\bjitsi: room participants=(\d+)\s
 fun parseOlcRtcRoomParticipants(line: String): Int? =
     olcRtcRoomParticipants.find(line)?.groupValues?.get(1)?.toIntOrNull()
 
+private val olcRtcRoomState = Regex("""\bclient: room state=(joined|join-failed|relay-ready|relay-failed)\s*$""")
+
+fun parseOlcRtcRoomState(line: String): String? =
+    olcRtcRoomState.find(line)?.groupValues?.get(1)
+
 fun desktopOlcRtcProcessMissing(process: Process?, bond: DesktopOlcRtcBond?): Boolean =
     process == null && bond == null
 

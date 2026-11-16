@@ -287,8 +287,7 @@ fun PkRoomCard(
      * screen the admin gate hides.
      */
     trailing: (@Composable () -> Unit)? = null,
-    bondRooms: List<Boolean>? = null,
-    bondRoomOccupants: List<Int?>? = null
+    bondRoomStates: List<org.olcbox.app.vpn.BondRoomStatus>? = null
 ) {
     val palette = LocalPkPalette.current
     val background by animateColorAsState(
@@ -433,25 +432,37 @@ fun PkRoomCard(
             }
         )
 
-        if (bondRooms != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                bondRooms.forEachIndexed { index, active ->
-                    val room = index + 1
-                    val participants = bondRoomOccupants?.getOrNull(index)
-                    val participantsSuffix = if (bondRoomOccupants == null) "" else "·${participants?.toString() ?: "—"}"
-                    Text(
-                        text = "$room$participantsSuffix",
-                        style = pkMono(10, 0.4),
-                        color = if (active) Color(0xFF22C55E) else Color(0xFFEF4444),
-                        modifier = Modifier.semantics {
-                            contentDescription = if (bondRoomOccupants == null) {
-                                "Room $room: ${if (active) "active" else "inactive"}"
-                            } else {
-                                "Room $room: ${if (active) "active" else "inactive"}, " +
-                                    (participants?.let { "$it participants" } ?: "participants unknown")
+        if (bondRoomStates != null) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                bondRoomStates.forEach { status ->
+                    val errorText = when (status.error) {
+                        org.olcbox.app.vpn.BondRoomError.CLIENT -> "Подключение не удалось"
+                        org.olcbox.app.vpn.BondRoomError.SERVER -> "Сервер не смог подключиться"
+                        null -> null
+                    }
+                    val activity = if (status.active) "active" else "inactive"
+                    val occupants = status.occupants?.let { "$it participants" } ?: "participants unknown"
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "${status.label}·${status.occupants?.toString() ?: "—"}",
+                            style = pkMono(10, 0.4),
+                            color = if (status.active) Color(0xFF22C55E) else Color(0xFFEF4444),
+                            modifier = Modifier.semantics {
+                                contentDescription = "Room ${status.label}: $activity, $occupants" +
+                                    (errorText?.let { ", $it" } ?: "")
                             }
+                        )
+                        if (errorText != null) {
+                            Text(
+                                text = errorText,
+                                style = pkMono(8, 0.2),
+                                color = Color(0xFFEF4444),
+                            )
                         }
-                    )
+                    }
                 }
             }
         }

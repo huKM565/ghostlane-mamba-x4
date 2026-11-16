@@ -24,8 +24,8 @@ interface VpnManager {
     val logs: StateFlow<List<String>>
     val status: StateFlow<VpnStatus>
     val isConnected: StateFlow<Boolean>
-    val bondRooms: StateFlow<List<Boolean>?> get() = NO_BOND_ROOMS
-    val bondRoomOccupants: StateFlow<List<Int?>?> get() = NO_BOND_ROOM_OCCUPANTS
+    val bondRoomStates: StateFlow<List<BondRoomStatus>?> get() = NO_BOND_ROOM_STATES
+    fun requestBondRoomState() {}
 
     /**
      * Things the tunnel did on its own that the person should be told about,
@@ -125,5 +125,5 @@ interface VpnManager {
 
 /** [VpnManager.hold] of a platform that never holds. */
 private val NOT_HOLDING: StateFlow<TunnelHold?> = MutableStateFlow<TunnelHold?>(null).asStateFlow()
-private val NO_BOND_ROOMS: StateFlow<List<Boolean>?> = MutableStateFlow<List<Boolean>?>(null).asStateFlow()
-private val NO_BOND_ROOM_OCCUPANTS: StateFlow<List<Int?>?> = MutableStateFlow<List<Int?>?>(null).asStateFlow()
+private val NO_BOND_ROOM_STATES: StateFlow<List<BondRoomStatus>?> =
+    MutableStateFlow<List<BondRoomStatus>?>(null).asStateFlow()

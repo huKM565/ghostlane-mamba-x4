@@ -6,6 +6,7 @@ interface OlcRtcBondRuntime {
     fun stop(timeoutMillis: Int)
     fun isRunning(): Boolean
     fun requestOccupancy()
+    fun requestRoomState() {}
     fun setDNS(servers: String)
 }
 
@@ -64,7 +65,10 @@ class OlcRtcBond(private val runtimes: List<OlcRtcBondRuntime>) {
     fun activeIndexes(): List<Int> = readyIndexes.filter { runtimes[it].isRunning() }.sorted()
 
     fun requestOccupancy() {
-        activeIndexes().forEach { runtimes[it].requestOccupancy() }
+        activeIndexes().forEach { index ->
+            runtimes[index].requestOccupancy()
+            runtimes[index].requestRoomState()
+        }
     }
 
     fun stop(timeoutMillis: Int) {

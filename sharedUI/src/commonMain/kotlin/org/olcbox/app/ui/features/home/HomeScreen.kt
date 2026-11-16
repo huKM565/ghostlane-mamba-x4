@@ -129,8 +129,7 @@ fun HomeScreen(
 
     val state by viewModel.state.collectAsState()
     val connectedSince by viewModel.connectedSince.collectAsState()
-    val bondRooms by viewModel.bondRooms.collectAsState()
-    val bondRoomOccupants by viewModel.bondRoomOccupants.collectAsState()
+    val bondRoomStates by viewModel.bondRoomStates.collectAsState()
     val channelLatency by viewModel.channelLatency.collectAsState()
     val subscriptionSettings by viewModel.subscriptionSettings.collectAsState()
     val routingSettings by viewModel.routingSettings.collectAsState()
@@ -376,6 +375,12 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            viewModel.replayBondRoomState()
+        }
+    }
+
     // Occupancy goes stale on its own, so it has to be re-asked.
     //
     // It was fetched once, when the location list loaded, and then never again — so a
@@ -590,8 +595,7 @@ fun HomeScreen(
             model = model,
             selectedLocationId = selectedId,
             isConnected = state.isVpnConnected,
-            bondRooms = bondRooms,
-            bondRoomOccupants = bondRoomOccupants,
+            bondRoomStates = bondRoomStates,
             pingsState = pingsState,
             pingsStale = locationViewModel.stalePingIds.any { id -> locations.any { it.storageId == id } },
             olcrtcSlots = locationViewModel.olcrtcSlots,

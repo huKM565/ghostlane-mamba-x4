@@ -90,6 +90,7 @@ import org.olcbox.app.vpn.desktop.desktopBondWatchDecision
 import org.olcbox.app.vpn.desktop.desktopBondWatchDecisionAfterRefresh
 import org.olcbox.app.vpn.desktop.desktopOlcRtcProcessMissing
 import org.olcbox.app.vpn.desktop.parseOlcRtcRoomParticipants
+import org.olcbox.app.vpn.desktop.parseOlcRtcRoomState
 import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -129,29 +130,77 @@ class DesktopVpnManager private constructor(
     private val _connectedSince = MutableStateFlow<Long?>(null)
     override val connectedSince: StateFlow<Long?> = _connectedSince.asStateFlow()
 
-    private val _bondRooms = MutableStateFlow<List<Boolean>?>(null)
-    override val bondRooms: StateFlow<List<Boolean>?> = _bondRooms.asStateFlow()
-
-    private val _bondRoomOccupants = MutableStateFlow<List<Int?>?>(null)
-    override val bondRoomOccupants: StateFlow<List<Int?>?> = _bondRoomOccupants.asStateFlow()
+    private val _bondRoomStates = MutableStateFlow<List<BondRoomStatus>?>(null)
+    override val bondRoomStates: StateFlow<List<BondRoomStatus>?> = _bondRoomStates.asStateFlow()
+    private var desktopBondRelayReady = emptyList<Boolean>()
+    private var desktopBondRawOccupants = emptyList<Int?>()
 
     private var desktopBondGeneration = 0L
 
     @Synchronized
+    private fun configureDesktopBondRooms(paths: List<org.olcbox.app.data.model.BondRoomConfig>) {
+        _bondRoomStates.value = paths.mapIndexed { index, path ->
+            BondRoomStatus(bondRoomLabel(index, path.provider), active = false)
+        }
+        desktopBondRelayReady = List(paths.size) { false }
+        desktopBondRawOccupants = List(paths.size) { null }
+    }
+
+    @Synchronized
     private fun setDesktopBondRooms(activeIndexes: List<Int>?) {
-        _bondRooms.value = activeIndexes?.let { active -> List(4) { it in active } }
-        _bondRoomOccupants.value = activeIndexes?.let { active ->
-            val previous = _bondRoomOccupants.value
-            List(4) { index -> previous?.getOrNull(index)?.takeIf { index in active } }
+        if (activeIndexes == null) {
+            _bondRoomStates.value = null
+            desktopBondRelayReady = emptyList()
+            desktopBondRawOccupants = emptyList()
+            return
+        }
+        val states = _bondRoomStates.value.orEmpty()
+        desktopBondRawOccupants = List(states.size) { index ->
+            desktopBondRawOccupants.getOrNull(index).takeIf { index in activeIndexes }
+        }
+        _bondRoomStates.value = states.mapIndexed { index, status ->
+            status.copy(
+                active = index in activeIndexes,
+                occupants = displayedOccupants(
+                    desktopBondRawOccupants[index],
+                    desktopBondRelayReady.getOrElse(index) { false },
+                ),
+            )
         }
     }
 
     @Synchronized
     private fun setDesktopBondRoomOccupant(index: Int, participants: Int) {
-        if (index !in 0..3 || _bondRooms.value?.getOrNull(index) != true) return
-        val updated = (_bondRoomOccupants.value ?: List<Int?>(4) { null }).toMutableList()
-        updated[index] = participants.takeIf { it > 0 }
-        _bondRoomOccupants.value = updated
+        val states = _bondRoomStates.value ?: return
+        val status = states.getOrNull(index)?.takeIf { it.active } ?: return
+        desktopBondRawOccupants = desktopBondRawOccupants.toMutableList().also { it[index] = participants }
+        _bondRoomStates.value = states.toMutableList().also {
+            it[index] = status.withOccupancy(
+                participants,
+                desktopBondRelayReady.getOrElse(index) { false },
+            )
+        }
+    }
+
+    @Synchronized
+    private fun setDesktopBondRoomState(index: Int, state: String) {
+        val states = _bondRoomStates.value ?: return
+        val status = states.getOrNull(index) ?: return
+        val relayReady = state == "relay-ready"
+        desktopBondRelayReady = desktopBondRelayReady.toMutableList().also { it[index] = relayReady }
+        val error = when (state) {
+            "joined", "relay-ready" -> null
+            "join-failed" -> BondRoomError.CLIENT
+            "relay-failed" -> BondRoomError.SERVER
+            else -> return
+        }
+        val active = if (state == "join-failed" || state == "relay-failed") false else status.active
+        _bondRoomStates.value = states.toMutableList().also {
+            it[index] = status.copy(active = active, error = error).withOccupancy(
+                desktopBondRawOccupants.getOrNull(index),
+                relayReady,
+            )
+        }
     }
 
     /**
@@ -1724,6 +1773,7 @@ class DesktopVpnManager private constructor(
         val (paths, ports) = planBondPaths(config, ::allocateBondPort)
         stopDesktopBond()
         stopDesktopCores()
+        configureDesktopBondRooms(paths)
         setDesktopBondRooms(paths.indices.toList())
         val launchGeneration = desktopBondGeneration
         val started = mutableListOf<DesktopOlcRtcBond.Room>()
@@ -1765,11 +1815,14 @@ class DesktopVpnManager private constructor(
                             lines.forEach { line ->
                                 addLog("rtc: $line")
                                 val participants = parseOlcRtcRoomParticipants(line)
+                                val roomState = parseOlcRtcRoomState(line)
                                 val currentProcess = desktopOlcRtcBond?.rooms?.getOrNull(index)?.process
-                                if (participants != null && launchGeneration == desktopBondGeneration &&
+                                if ((participants != null || roomState != null) &&
+                                    launchGeneration == desktopBondGeneration &&
                                     (currentProcess == null || currentProcess === launched)
                                 ) {
-                                    setDesktopBondRoomOccupant(index, participants)
+                                    if (participants != null) setDesktopBondRoomOccupant(index, participants)
+                                    if (roomState != null) setDesktopBondRoomState(index, roomState)
                                 }
                             }
                         }

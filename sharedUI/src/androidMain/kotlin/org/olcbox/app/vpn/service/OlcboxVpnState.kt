@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.olcbox.app.util.nowMillis
 import org.olcbox.app.vpn.SystemVpnMode
+import org.olcbox.app.data.model.BondRoomConfig
+import org.olcbox.app.vpn.BondRoomError
+import org.olcbox.app.vpn.BondRoomStatus
 import org.olcbox.app.vpn.TrafficCounters
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.TunnelHold
@@ -31,27 +34,85 @@ object OlcboxVpnState {
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
-    private val _bondRooms = MutableStateFlow<List<Boolean>?>(null)
-    val bondRooms = _bondRooms.asStateFlow()
+    private val _bondRoomStates = MutableStateFlow<List<BondRoomStatus>?>(null)
+    val bondRoomStates = _bondRoomStates.asStateFlow()
+    private var bondRelayReady = emptyList<Boolean>()
+    private var bondRawOccupants = emptyList<Int?>()
 
-    private val _bondRoomOccupants = MutableStateFlow<List<Int?>?>(null)
-    val bondRoomOccupants = _bondRoomOccupants.asStateFlow()
+    @Volatile
+    var bondRoomReplay: (() -> Unit)? = null
+
+    @Synchronized
+    fun configureBondRooms(paths: List<BondRoomConfig>) {
+        _bondRoomStates.value = paths.mapIndexed { index, path ->
+            BondRoomStatus(org.olcbox.app.vpn.bondRoomLabel(index, path.provider), active = false)
+        }
+        bondRelayReady = List(paths.size) { false }
+        bondRawOccupants = List(paths.size) { null }
+    }
 
     @Synchronized
     fun setBondRooms(activeIndexes: List<Int>?) {
-        _bondRooms.value = activeIndexes?.let { active -> List(4) { it in active } }
-        _bondRoomOccupants.value = activeIndexes?.let { active ->
-            val previous = _bondRoomOccupants.value
-            List(4) { index -> previous?.getOrNull(index)?.takeIf { index in active } }
+        if (activeIndexes == null) {
+            _bondRoomStates.value = null
+            bondRelayReady = emptyList()
+            bondRawOccupants = emptyList()
+            bondRoomReplay = null
+            return
+        }
+        val states = _bondRoomStates.value.orEmpty()
+        bondRawOccupants = List(states.size) { index ->
+            bondRawOccupants.getOrNull(index).takeIf { index in activeIndexes }
+        }
+        _bondRoomStates.value = states.mapIndexed { index, status ->
+            status.copy(
+                active = index in activeIndexes,
+                occupants = org.olcbox.app.vpn.displayedOccupants(
+                    bondRawOccupants[index],
+                    bondRelayReady.getOrElse(index) { false },
+                ),
+            )
         }
     }
 
     @Synchronized
     fun setBondRoomOccupant(index: Int, participants: Int) {
-        if (index !in 0..3 || _bondRooms.value?.getOrNull(index) != true) return
-        val updated = (_bondRoomOccupants.value ?: List<Int?>(4) { null }).toMutableList()
-        updated[index] = participants.takeIf { it > 0 }
-        _bondRoomOccupants.value = updated
+        val states = _bondRoomStates.value ?: return
+        val status = states.getOrNull(index)?.takeIf { it.active } ?: return
+        bondRawOccupants = bondRawOccupants.toMutableList().also { it[index] = participants }
+        _bondRoomStates.value = states.toMutableList().also {
+            it[index] = status.copy(
+                occupants = org.olcbox.app.vpn.displayedOccupants(
+                    participants,
+                    bondRelayReady.getOrElse(index) { false },
+                ),
+            )
+        }
+    }
+
+    @Synchronized
+    fun setBondRoomState(index: Int, state: String) {
+        val states = _bondRoomStates.value ?: return
+        val status = states.getOrNull(index) ?: return
+        val relayReady = state == "relay-ready"
+        bondRelayReady = bondRelayReady.toMutableList().also { it[index] = relayReady }
+        val error = when (state) {
+            "joined", "relay-ready" -> null
+            "join-failed" -> BondRoomError.CLIENT
+            "relay-failed" -> BondRoomError.SERVER
+            else -> return
+        }
+        val active = if (state == "join-failed" || state == "relay-failed") false else status.active
+        _bondRoomStates.value = states.toMutableList().also {
+            it[index] = status.copy(active = active, error = error).let { updated ->
+                updated.copy(
+                    occupants = org.olcbox.app.vpn.displayedOccupants(
+                        bondRawOccupants.getOrNull(index),
+                        relayReady,
+                    ),
+                )
+            }
+        }
     }
 
     private val _connectedSince = MutableStateFlow<Long?>(null)

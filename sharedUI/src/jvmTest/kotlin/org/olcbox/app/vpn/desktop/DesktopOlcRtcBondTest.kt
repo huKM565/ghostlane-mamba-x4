@@ -94,6 +94,15 @@ class DesktopOlcRtcBondTest {
     }
 
     @Test
+    fun parsesOnlyStructuredRoomStateEvents() {
+        assertEquals("joined", parseOlcRtcRoomState("2026/11/17 01:00:00 client: room state=joined"))
+        assertEquals("relay-ready", parseOlcRtcRoomState("client: room state=relay-ready"))
+        assertEquals("relay-failed", parseOlcRtcRoomState("client: room state=relay-failed"))
+        assertEquals(null, parseOlcRtcRoomState("client: room state=unknown"))
+        assertEquals(null, parseOlcRtcRoomState("session opened"))
+    }
+
+    @Test
     fun recoverRestartsAndReturnsTheMissingRoom() {
         val rooms = rooms(4)
         val replacement = FakeProcess(44)
