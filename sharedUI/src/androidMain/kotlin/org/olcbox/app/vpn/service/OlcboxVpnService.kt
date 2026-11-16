@@ -80,6 +80,7 @@ import org.olcbox.app.net.DirectDns
 import org.olcbox.app.net.LinkParser
 import org.olcbox.app.net.LocationKind
 import org.olcbox.app.net.OlcRtcBond
+import org.olcbox.app.net.planBondPaths
 import org.olcbox.app.net.OlcrtcDirectRules
 import org.olcbox.app.net.OlcrtcDtls
 import org.olcbox.app.net.OutboundSpec
@@ -1306,7 +1307,7 @@ class OlcboxVpnService : VpnService() {
                         login = login,
                     )
                 )
-                label = "sing-box front + Xray/Mamba x4"
+                label = "sing-box front + Xray/olcRTC bond"
                 diagnose = { singBoxCore.diagnostics() + "\n" + xrayCore.diagnostics() }
                 alive = {
                     olcRtcBond?.isRunning() == true && singBoxCore.isRunning() && xrayCore.isRunning()
@@ -1451,14 +1452,7 @@ class OlcboxVpnService : VpnService() {
         val keepProcessBound = shouldKeepProcessBound(upstream)
         val config = location.normalized()
         return try {
-            val rooms = config.bondedRooms()
-            require(rooms.size == 4) { "a bonded location requires four rooms" }
-            val ports = mutableListOf<Int>()
-            while (ports.size < 4) {
-                val port = freeLoopbackPort()
-                require(port !in ports) { "could not allocate four distinct room ports" }
-                ports += port
-            }
+            val (paths, ports) = planBondPaths(config, ::freeLoopbackPort)
             resetRtcHealthState()
             ports.forEach { port ->
                 waitForSocksPortReleased(port, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
@@ -1466,10 +1460,12 @@ class OlcboxVpnService : VpnService() {
                     throw IllegalStateException("SOCKS port $port is still in use")
                 }
             }
-            waitForJitsiRoomCleanup(config.bypassProvider)
+            if (paths.any { it.provider == LocationConfig.PROVIDER_JITSI }) {
+                waitForJitsiRoomCleanup(LocationConfig.PROVIDER_JITSI)
+            }
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
-            val runtimes = rooms.map { Mobile.new_() }
+            val runtimes = paths.map { Mobile.new_() }
             val bond = OlcRtcBond(runtimes.map(::GomobileOlcRtcBondRuntime))
             olcRtcBond = bond
             runtimes.forEachIndexed { index, runtime ->
@@ -1484,8 +1480,12 @@ class OlcboxVpnService : VpnService() {
             }
             bondRoomPorts = ports
             bondLocation = config
-            OlcboxVpnState.setBondRooms(listOf(0, 1, 2, 3))
-            lastMobileProvider = config.bypassProvider
+            OlcboxVpnState.setBondRooms(paths.indices.toList())
+            lastMobileProvider = if (paths.any { it.provider == LocationConfig.PROVIDER_JITSI }) {
+                LocationConfig.PROVIDER_JITSI
+            } else {
+                config.bypassProvider
+            }
             val deviceId = deviceIdentityProvider.hwid().orEmpty()
             runtimes.forEachIndexed { index, runtime ->
                 configureMobileTransport(
@@ -1496,14 +1496,15 @@ class OlcboxVpnService : VpnService() {
                     listenHost = AndroidSocksProxySettings.DEFAULT_HOST,
                 )
                 runtime.setUDP(false)
-                runtime.setProvider(config.bypassProvider)
-                runtime.setRoom(rooms[index])
+                runtime.setProvider(paths[index].provider)
+                runtime.setTransport(paths[index].transport)
+                runtime.setRoom(paths[index].room)
                 runtime.setDeviceID(deviceId)
-                runtime.setKey(config.key)
+                runtime.setKey(paths[index].key)
                 runtime.setSocksPort(ports[index].toLong())
                 runtime.setSocksCredentials(socksUsername, socksPassword)
             }
-            addLog("Starting olcRTC Mamba x4 provider=${config.bypassProvider}, transport=${config.transport}")
+            addLog("Starting olcRTC bond x${paths.size}")
             val activeRooms = bond.start(OLCRTC_READY_TIMEOUT_MS.toInt())
             bondBalancedRooms = activeRooms
             OlcboxVpnState.setBondRooms(activeRooms)
@@ -1518,7 +1519,7 @@ class OlcboxVpnService : VpnService() {
                 stopMobileAndWait()
                 return false
             }
-            addLog("olcRTC Mamba x${activeRooms.size} ready on ${activePorts.joinToString()}")
+            addLog("olcRTC bond x${activeRooms.size}/${paths.size} ready")
             markRtcConnected()
             if (keepProcessBound) {
                 addLog("Keeping olcRTC bond bound to ${getNetName(upstream)}")

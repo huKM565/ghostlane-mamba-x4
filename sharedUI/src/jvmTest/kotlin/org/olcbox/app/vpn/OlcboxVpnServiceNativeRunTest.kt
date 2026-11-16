@@ -134,6 +134,20 @@ class OlcboxVpnServiceNativeRunTest {
     }
 
     @Test
+    fun bondStartUsesEveryConfiguredPathInsteadOfAFixedMambaFour() {
+        val body = member("startMobileBond")
+
+        assertTrue("planBondPaths(" in body, "bond start does not use the mixed-path planner")
+        assertFalse("rooms.size == 4" in body, "bond start still requires exactly four rooms")
+        assertFalse("ports.size < 4" in body, "bond start still allocates exactly four ports")
+        assertFalse("listOf(0, 1, 2, 3)" in body, "bond start still exposes four fixed indicators")
+        assertTrue("paths[index].provider" in body, "each runtime must get its own provider")
+        assertTrue("paths[index].room" in body, "each runtime must get its own room")
+        assertTrue("paths[index].key" in body, "each runtime must get its own key")
+        assertTrue("paths[index].transport" in body, "each runtime must get its own transport")
+    }
+
+    @Test
     fun bondActivationReplaysCachedOccupancyAfterMarkingRoomsActive() {
         for (name in listOf("startMobileBond", "refreshMobileBond")) {
             val body = member(name)
