@@ -394,7 +394,7 @@ fun PkRoomCard(
                     val occupants = status.occupants?.let { "$it participants" } ?: "participants unknown"
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = "${status.label}·${status.occupants?.toString() ?: "—"}",
+                            text = "${status.label}·${status.occupants?.toString() ?: if (status.active) "✓" else "—"}",
                             style = pkMono(10, 0.4),
                             color = if (status.active) Color(0xFF22C55E) else Color(0xFFEF4444),
                             modifier = Modifier.semantics {

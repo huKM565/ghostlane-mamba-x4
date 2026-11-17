@@ -36,6 +36,7 @@ class BondRoomIndicatorsTest {
                     BondRoomStatus("M2", active = true, occupants = 0),
                     BondRoomStatus("M3", active = false),
                     BondRoomStatus("M4", active = true, occupants = 4),
+                    BondRoomStatus("V1", active = true),
                 ),
                 onClick = {},
             )
@@ -43,6 +44,7 @@ class BondRoomIndicatorsTest {
             assertEquals(1, onAllNodesWithContentDescription("Room M1: active, 1 participants").fetchSemanticsNodes().size)
             assertEquals(1, onAllNodesWithContentDescription("Room M2: active, 0 participants").fetchSemanticsNodes().size)
             assertEquals(1, onAllNodesWithContentDescription("Room M3: inactive, participants unknown").fetchSemanticsNodes().size)
+            assertEquals(1, onAllNodesWithText("V1·✓").fetchSemanticsNodes().size)
         }
     }
 
