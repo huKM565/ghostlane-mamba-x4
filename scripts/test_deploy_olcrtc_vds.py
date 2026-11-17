@@ -181,6 +181,9 @@ class DeployPreflightTest(unittest.TestCase):
         certbot = root / "remote-bin/certbot"
         certbot.write_text("#!/usr/bin/env sh\nexit 0\n")
         certbot.chmod(0o755)
+        chgrp = root / "remote-bin/chgrp"
+        chgrp.write_text("#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" >> \"${FAKE_REMOTE_ROOT}/chgrp.log\"\n")
+        chgrp.chmod(0o755)
         systemd_run = root / "remote-bin/systemd-run"
         systemd_run.write_text(FAKE_SYSTEMD_RUN)
         systemd_run.chmod(0o755)
@@ -585,7 +588,11 @@ class SubscriptionTest(DeployLifecycleTest):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         published = self.remote2 / "var/www/ilyukhaline/private.txt"
         self.assertEqual(body, published.read_text())
-        self.assertEqual(0o600, published.stat().st_mode & 0o777)
+        self.assertEqual(0o640, published.stat().st_mode & 0o777)
+        self.assertEqual(
+            f"www-data {published}.new",
+            (self.remote2 / "chgrp.log").read_text().strip(),
+        )
         snippet = self.remote2 / "etc/nginx/snippets/ilyukhaline-subscription.conf"
         self.assertIn("autoindex off;", snippet.read_text())
         self.assertIn("location = /private.txt", snippet.read_text())

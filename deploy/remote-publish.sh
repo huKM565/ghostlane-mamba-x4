@@ -46,7 +46,8 @@ fi
 if [ -f "${snippet}" ]; then
   cp -a "${snippet}" "${stage}/snippet.backup"
 fi
-install -m 600 "${stage}/subscription.txt" "${publish_path}.new"
+install -m 640 "${stage}/subscription.txt" "${publish_path}.new"
+chgrp www-data "${publish_path}.new"
 mv -f "${publish_path}.new" "${publish_path}"
 install -m 644 "${stage}/subscription.conf" "${snippet}.new"
 mv -f "${snippet}.new" "${snippet}"
