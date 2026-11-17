@@ -14,10 +14,13 @@ PROFILES = (
 
 
 def field(text, name):
-    match = re.search(rf"(?m)^  {re.escape(name)}: '?([^'\n]+)'?$", text)
+    match = re.search(rf"(?m)^  {re.escape(name)}: (.*)$", text)
     if not match:
         raise ValueError(f"managed config has no {name}")
-    return match.group(1).strip()
+    value = match.group(1).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    return value
 
 
 def load_bundle(path):
@@ -39,7 +42,9 @@ def load_bundle(path):
     for label in LABELS:
         config = sections.get(f"ROOM {label}")
         if config is None:
-            raise ValueError(f"managed bundle has no room {label}")
+            if label[0] in "mv":
+                raise ValueError(f"managed bundle has no room {label}")
+            continue
         room = {
             "provider": field(config, "provider"),
             "room": field(config, "id"),
@@ -49,6 +54,9 @@ def load_bundle(path):
         if any(char in room["room"] for char in "\r\n#"):
             raise ValueError(f"room {label} contains an unsafe character")
         rooms[label] = room
+    telemost_count = sum(label.startswith("t") for label in rooms)
+    if telemost_count not in (0, 4):
+        raise ValueError("managed bundle has an incomplete Telemost group")
     return rooms, vless
 
 
@@ -70,6 +78,8 @@ def render_group(group, rooms, vless):
     output = []
     bond_vless = vless_link(vless)
     for profile, prefix in PROFILES:
+        if f"{prefix}1" not in rooms:
+            continue
         selected = [rooms[f"{prefix}{index}"] for index in range(1, 5)]
         keys = {room["key"] for room in selected}
         output.append(olc_link(selected[0], f"{group} — {profile}"))
@@ -79,11 +89,12 @@ def render_group(group, rooms, vless):
         else:
             output.extend(f"##bond-room: {olc_link(room)}" for room in selected[1:])
         output.append(f"##bond-vless: {bond_vless}")
-    ordered = [rooms[label] for label in LABELS]
-    output.append(olc_link(ordered[0], f"{group} — Multi 12x"))
-    output.append(f"##group: {group}")
-    output.extend(f"##bond-room: {olc_link(room)}" for room in ordered[1:])
-    output.append(f"##bond-vless: {bond_vless}")
+    ordered = [rooms[label] for label in LABELS if label in rooms]
+    if len(ordered) == 12:
+        output.append(olc_link(ordered[0], f"{group} — Multi 12x"))
+        output.append(f"##group: {group}")
+        output.extend(f"##bond-room: {olc_link(room)}" for room in ordered[1:])
+        output.append(f"##bond-vless: {bond_vless}")
     return output
 
 

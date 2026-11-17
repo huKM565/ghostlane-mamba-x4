@@ -1,3 +1,72 @@
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 22330be8..7cc8e07f 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -88,6 +88,7 @@ Ready-made examples:
+ | `data` | optional: directory holding `names`/`surnames` files that override the built-in display-name dictionaries. Resolved relative to the YAML file |
+ | `debug` | verbose logging |
+ | `stats.listen` | loopback address serving `GET /stats` with per-key byte totals, e.g. `127.0.0.1:9464`; empty disables |
++| `egress.allow` | server only: one exact `IP:port` that TCP and UDP may reach despite the private-address policy, for a dedicated loopback core; empty keeps every such target blocked |
+ | `access_log` | server only: a FIFO the server writes an access line to for every stream it opens and every new UDP destination of a session (see [Access lines](#access-lines)). Resolved relative to the YAML file; empty, the default, writes nothing |
+ 
+ `crypto.key_file` is read relative to the YAML file. You cannot set `crypto.key` and `crypto.key_file` at the same time.
+@@ -121,7 +122,7 @@ route:
+ 
+ ## Server egress
+ 
+-A server never opens a TCP connection or a UDP flow for a client into its own host or its networks: loopback, private, link-local (cloud metadata included), shared CGNAT space (`100.64.0.0/10`), multicast, reserved and the other ranges Xray's freedom outbound refuses by default. A name is resolved once and judged by every address it resolves to - one refused address refuses the target - and the checked address itself is dialed, so the name is never resolved a second time. An IPv4-mapped IPv6 address is judged as the IPv4 address it reaches. With `socks.proxy_addr` a name goes to the proxy unresolved, for the proxy to resolve under its own policy; only a literal address is judged.
++A server never opens a TCP connection or a UDP flow for a client into its own host or its networks: loopback, private, link-local (cloud metadata included), shared CGNAT space (`100.64.0.0/10`), multicast, reserved and the other ranges Xray's freedom outbound refuses by default. A name is resolved once and judged by every address it resolves to - one refused address refuses the target - and the checked address itself is dialed, so the name is never resolved a second time. An IPv4-mapped IPv6 address is judged as the IPv4 address it reaches. With `socks.proxy_addr` a name goes to the proxy unresolved, for the proxy to resolve under its own policy; only a literal address is judged. `egress.allow` is the sole exception: it names one literal IP and port, both must match, and it lifts no other address, port or range.
+ 
+ Without `debug` the server's log names no destination: a failed connect says why (`blocked target`, `no such host`, `connection refused`, ...) but not where, and the `traffic:` line carries the session and the byte counts. `debug: true` adds the target to every connect.
+ 
+diff --git a/docs/configuration.ru.md b/docs/configuration.ru.md
+index aa402edc..011be326 100644
+--- a/docs/configuration.ru.md
++++ b/docs/configuration.ru.md
+@@ -88,6 +88,7 @@ olcrtc /etc/olcrtc/client.yaml
+ | `data` | опционально: каталог с файлами `names`/`surnames`, переопределяющими встроенные словари имён. Путь резолвится относительно YAML-файла |
+ | `debug` | подробное логирование |
+ | `stats.listen` | loopback-адрес, на котором `GET /stats` отдаёт байты по каждому ключу, например `127.0.0.1:9464`; пустое значение выключает |
++| `egress.allow` | только сервер: один точный `IP:port`, к которому разрешены TCP и UDP вопреки политике частных адресов, для выделенного loopback-core; пусто = все такие адресаты остаются запрещены |
+ | `access_log` | только сервер: FIFO, в которую сервер пишет строку доступа на каждый открытый стрим и на каждый новый UDP-адресат сессии (см. [Строки доступа](#строки-доступа)). Путь резолвится относительно YAML-файла; пустое значение, по умолчанию, ничего не пишет |
+ 
+ `crypto.key_file` читается относительно YAML-файла. Нельзя одновременно задавать `crypto.key` и `crypto.key_file`.
+@@ -121,7 +122,7 @@ route:
+ 
+ ## Исходящие соединения сервера
+ 
+-Сервер никогда не открывает для клиента TCP-соединение или UDP-поток к собственному хосту и его сетям: loopback, частные сети, link-local (включая метаданные облака), разделяемое пространство CGNAT (`100.64.0.0/10`), multicast, зарезервированные и остальные диапазоны, которые по умолчанию отклоняет freedom-outbound Xray. Имя резолвится один раз и проверяется по всем адресам, которые оно вернуло - один запрещённый адрес запрещает всю цель, - и подключение идёт к уже проверенному адресу, так что второй раз имя не резолвится. IPv4-mapped IPv6-адрес проверяется как IPv4-адрес, к которому он ведёт. С `socks.proxy_addr` имя уходит прокси как есть и резолвится прокси по его собственной политике; здесь проверяется только адрес-литерал.
++Сервер никогда не открывает для клиента TCP-соединение или UDP-поток к собственному хосту и его сетям: loopback, частные сети, link-local (включая метаданные облака), разделяемое пространство CGNAT (`100.64.0.0/10`), multicast, зарезервированные и остальные диапазоны, которые по умолчанию отклоняет freedom-outbound Xray. Имя резолвится один раз и проверяется по всем адресам, которые оно вернуло - один запрещённый адрес запрещает всю цель, - и подключение идёт к уже проверенному адресу, так что второй раз имя не резолвится. IPv4-mapped IPv6-адрес проверяется как IPv4-адрес, к которому он ведёт. С `socks.proxy_addr` имя уходит прокси как есть и резолвится прокси по его собственной политике; здесь проверяется только адрес-литерал. Единственное исключение - `egress.allow`: оно задаёт один IP-литерал и порт, оба должны совпасть, и не открывает никакой другой адрес, порт или диапазон.
+ 
+ Без `debug` лог сервера не называет ни одного адресата: неудачное подключение пишет причину (`blocked target`, `no such host`, `connection refused`, ...), но не цель, а строка `traffic:` содержит сессию и счётчики байт. `debug: true` добавляет цель к каждому подключению.
+ 
+diff --git a/internal/app/session/config.go b/internal/app/session/config.go
+index 28cc727f..015821d3 100644
+--- a/internal/app/session/config.go
++++ b/internal/app/session/config.go
+@@ -170,6 +170,10 @@ type Config struct {
+ 	// AccessLog is the FIFO a server writes its access lines to (server.Config);
+ 	// empty writes none. ai-generated: the field (access_log).
+ 	AccessLog string
++	// AllowedTarget is one exact IP:port a server may reach despite the egress
++	// policy, for a dedicated loopback core. Empty keeps every target blocked.
++	// ai-generated: the field (egress.allow).
++	AllowedTarget string
+ 	// UDPDisabled turns the SOCKS5 UDP relay off; UDPMaxFlows caps its flows
+ 	// (0 means the default).
+ 	UDPDisabled bool
+diff --git a/internal/app/session/run.go b/internal/app/session/run.go
+index 42f5384f..498d7383 100644
+--- a/internal/app/session/run.go
++++ b/internal/app/session/run.go
+@@ -111,6 +111,7 @@ func runServer(
+ 		TransportOptions: opts, Engine: cfg.Engine, URL: cfg.URL, Token: cfg.Token,
+ 		ProviderToken: cfg.ProviderToken, Liveness: liveness, Traffic: traffic,
+ 		UnsafeAllowPrivateTargets: cfg.UnsafeAllowPrivateTargets, // ai-generated (egress hardening)
++		AllowedTarget:             cfg.AllowedTarget,             // ai-generated (egress.allow)
+ 		OnSessionOpen: func(sessionID, deviceID string, claims map[string]any) {
+ 			logger.Infof("session opened: id=%s device=%s claims=%v", sessionID, deviceID, claims)
+ 		},
 diff --git a/internal/client/client.go b/internal/client/client.go
 index 51fedb70..ff31de10 100644
 --- a/internal/client/client.go
@@ -225,6 +294,57 @@ index 459463e0..694c5c51 100644
 +		t.Fatalf("room states = %v, want %v", states, want)
 +	}
 +}
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 2543bacb..de5fd80e 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -87,6 +87,7 @@ type File struct {
+ 	Data     string    `yaml:"data"`
+ 	Debug    bool      `yaml:"debug"`
+ 	Stats    Stats     `yaml:"stats"`
++	Egress   Egress    `yaml:"egress"`
+ 
+ 	// KeysPath is where the top-level crypto.keys_file was read from, a
+ 	// relative path taken against the config file; empty when the keys are
+@@ -112,6 +113,12 @@ type Stats struct {
+ 	Listen string `yaml:"listen"` // loopback host:port serving GET /stats; empty disables
+ }
+ 
++// Egress configures one exact target a server may reach despite the default
++// private-address policy. ai-generated: the whole block (egress.allow).
++type Egress struct {
++	Allow string `yaml:"allow"`
++}
++
+ // Profile is a failover entry that overrides top-level runtime fields.
+ type Profile struct {
+ 	Name     string `yaml:"name"`
+@@ -503,6 +510,7 @@ func Apply(file File) session.Config {
+ 	cfg.Amount = file.Gen.Amount
+ 	cfg.StatsListen = file.Stats.Listen
+ 	cfg.AccessLog = file.AccessLog
++	cfg.AllowedTarget = file.Egress.Allow
+ 
+ 	return cfg
+ }
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 5f8d6ef3..c85ef9c1 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -264,6 +264,13 @@ func TestApplyMapsStatsListen(t *testing.T) {
+ 	}
+ }
+ 
++func TestApplyMapsEgressAllow(t *testing.T) {
++	got := Apply(File{Mode: testModeSrv, Egress: Egress{Allow: "127.0.0.1:10000"}})
++	if got.AllowedTarget != "127.0.0.1:10000" {
++		t.Fatalf("AllowedTarget = %q, want the egress.allow value", got.AllowedTarget)
++	}
++}
++
+ func TestLoadCryptoKeysListAndFile(t *testing.T) {
+ 	dir := t.TempDir()
+ 	ring := []string{
 diff --git a/internal/engine/builtin/builtin.go b/internal/engine/builtin/builtin.go
 index 09cf37b9..36137df0 100644
 --- a/internal/engine/builtin/builtin.go
@@ -435,6 +555,195 @@ index 00000000..80b54fb2
 +		t.Fatal("the Jitsi session dropped OnOccupancy")
 +	}
 +}
+diff --git a/internal/server/egress.go b/internal/server/egress.go
+index 28ce5807..ddadad83 100644
+--- a/internal/server/egress.go
++++ b/internal/server/egress.go
+@@ -82,7 +82,7 @@ func blockedAddr(addr netip.Addr) bool {
+ 	return false
+ }
+ 
+-// targetAddrs returns the addresses the exit may dial for host: the literal
++// targetAddrs returns the addresses the exit may dial for host:port: the literal
+ // itself, or what the server's resolver answers for the name in network
+ // ("ip" or "ip4"). One refused address refuses the target, so a name cannot
+ // carry a private address in beside a public one. The caller dials exactly
+@@ -90,9 +90,9 @@ func blockedAddr(addr netip.Addr) bool {
+ // and the dial.
+ //
+ // ai-generated: the whole function (egress hardening).
+-func (s *Server) targetAddrs(ctx context.Context, network, host string) ([]netip.Addr, error) {
++func (s *Server) targetAddrs(ctx context.Context, network, host string, port int) ([]netip.Addr, error) {
+ 	if addr, err := netip.ParseAddr(host); err == nil {
+-		return s.allowTargets([]netip.Addr{addr})
++		return s.allowTargets([]netip.Addr{addr}, port)
+ 	}
+ 	ips, err := s.lookup().LookupIP(ctx, network, host)
+ 	if err != nil {
+@@ -107,16 +107,19 @@ func (s *Server) targetAddrs(ctx context.Context, network, host string) ([]netip
+ 	if len(addrs) == 0 {
+ 		return nil, errNoTargetAddress
+ 	}
+-	return s.allowTargets(addrs)
++	return s.allowTargets(addrs, port)
+ }
+ 
+ // allowTargets unmaps addrs in place, or refuses them all when one is an
+-// address the exit must not reach.
++// address the exit must not reach. The configured allowedTarget is the only
++// exception and applies to its exact address and port.
+ //
+ // ai-generated: the whole function (egress hardening).
+-func (s *Server) allowTargets(addrs []netip.Addr) ([]netip.Addr, error) {
++func (s *Server) allowTargets(addrs []netip.Addr, port int) ([]netip.Addr, error) {
+ 	for i, addr := range addrs {
+-		if !s.unsafeAllowPrivateTargets && blockedAddr(addr) {
++		allowed := s.allowedTarget != nil && port > 0 && port <= 65535 &&
++			*s.allowedTarget == netip.AddrPortFrom(addr.Unmap(), uint16(port))
++		if !allowed && !s.unsafeAllowPrivateTargets && blockedAddr(addr) {
+ 			return nil, errBlockedTarget
+ 		}
+ 		addrs[i] = addr.Unmap()
+@@ -238,7 +241,7 @@ func (s *Server) dial(ctx context.Context, request ConnectRequest) (net.Conn, er
+ 	// resolve under its own policy (Tor, WARP), as on the UDP path: only a
+ 	// literal can be judged here. ai-generated: this check (egress hardening).
+ 	if isLiteral(request.Addr) {
+-		if _, err := s.targetAddrs(ctx, "ip", request.Addr); err != nil {
++		if _, err := s.targetAddrs(ctx, "ip", request.Addr, request.Port); err != nil {
+ 			return nil, err
+ 		}
+ 	}
+@@ -264,7 +267,7 @@ func (s *Server) dial(ctx context.Context, request ConnectRequest) (net.Conn, er
+ //
+ // ai-generated: the whole function (egress hardening).
+ func (s *Server) dialDirect(ctx context.Context, request ConnectRequest) (net.Conn, error) {
+-	addrs, err := s.targetAddrs(ctx, "ip4", request.Addr)
++	addrs, err := s.targetAddrs(ctx, "ip4", request.Addr, request.Port)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/internal/server/egress_test.go b/internal/server/egress_test.go
+index 9e498c89..0645c9b8 100644
+--- a/internal/server/egress_test.go
++++ b/internal/server/egress_test.go
+@@ -142,6 +142,20 @@ func captureLog(t *testing.T) *lockedLog {
+ 	return &buf
+ }
+ 
++func TestExactAllowedTarget(t *testing.T) {
++	allowed := netip.MustParseAddrPort("127.0.0.1:10000")
++	s := &Server{allowedTarget: &allowed}
++	if _, err := s.targetAddrs(context.Background(), "ip4", allowed.Addr().String(), 10000); err != nil {
++		t.Fatalf("allowed target: %v", err)
++	}
++	if _, err := s.targetAddrs(context.Background(), "ip4", allowed.Addr().String(), 10001); !errors.Is(err, errBlockedTarget) {
++		t.Fatalf("another port error = %v, want blocked target", err)
++	}
++	if _, err := s.targetAddrs(context.Background(), "ip4", "10.0.0.1", 10000); !errors.Is(err, errBlockedTarget) {
++		t.Fatalf("another address error = %v, want blocked target", err)
++	}
++}
++
+ func TestBlockedAddr(t *testing.T) {
+ 	blocked := []string{
+ 		"127.0.0.1", "127.8.9.10", "0.0.0.0", "0.1.2.3",
+diff --git a/internal/server/server.go b/internal/server/server.go
+index 8c59ef85..01de34c3 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -106,11 +106,12 @@ type Server struct {
+ 	access *accessLog
+ 
+ 	// unsafeAllowPrivateTargets lifts the egress policy (blockedRanges) for
+-	// TCP CONNECT and UDP flows alike; tests only. dialTarget dials a
+-	// CONNECT's checked ip:port, nil meaning the protected dialer; a test
+-	// sets it to see which address a CONNECT reaches. ai-generated: both
+-	// fields (egress hardening; the first was UDP-only).
++	// TCP CONNECT and UDP flows alike; tests only. allowedTarget exempts one
++	// exact ip:port. dialTarget dials a CONNECT's checked ip:port, nil meaning
++	// the protected dialer; a test sets it to see which address a CONNECT
++	// reaches. ai-generated: the fields (egress hardening and egress.allow).
+ 	unsafeAllowPrivateTargets bool
++	allowedTarget             *netip.AddrPort
+ 	dialTarget                func(ctx context.Context, network, address string) (net.Conn, error)
+ 
+ 	// UDP relay state (see udp.go). udpPendingFlows counts flows being
+@@ -156,6 +157,9 @@ type Config struct {
+ 	// Xray's form with the key id as the email. Empty writes nothing.
+ 	// ai-generated: the field (access_log).
+ 	AccessLog string
++	// AllowedTarget is one exact IP:port exempt from the egress policy.
++	// ai-generated: the field (egress.allow).
++	AllowedTarget string
+ 	// UDPDisabled turns the SOCKS5 UDP relay off; UDPMaxFlows caps concurrent
+ 	// flows (0 means the default). UnsafeAllowPrivateTargets lets TCP CONNECT
+ 	// and UDP flows reach loopback, private, link-local and the other blocked
+@@ -210,6 +214,15 @@ func Run(ctx context.Context, cfg Config) error {
+ 	if onTraffic == nil {
+ 		onTraffic = func(string, string, uint64, uint64) {}
+ 	}
++	var allowedTarget *netip.AddrPort
++	if cfg.AllowedTarget != "" {
++		target, parseErr := netip.ParseAddrPort(cfg.AllowedTarget)
++		if parseErr != nil {
++			return fmt.Errorf("parse egress allowed target: %w", parseErr)
++		}
++		target = netip.AddrPortFrom(target.Addr().Unmap(), target.Port())
++		allowedTarget = &target
++	}
+ 	s := &Server{
+ 		ring: muxconn.NewRingSource(ring), authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
+ 		dnsServer: cfg.DNSServer, resolver: tunnelcore.Resolver(cfg.Resolver, cfg.DNSServer),
+@@ -222,6 +235,7 @@ func Run(ctx context.Context, cfg Config) error {
+ 		// ai-generated: the test hook (egress hardening); a release build
+ 		// has no hook and always keeps the policy.
+ 		unsafeAllowPrivateTargets: cfg.UnsafeAllowPrivateTargets || testhooks.AllowPrivateTargets(),
++		allowedTarget:             allowedTarget,
+ 		udpFlows:                  make(map[serverUDPKey]*serverUDPFlow),
+ 	}
+ 	// ai-generated: the access log, which names a stream's key by the meter's
+diff --git a/internal/server/udp.go b/internal/server/udp.go
+index d5aaecd6..9e5700e4 100644
+--- a/internal/server/udp.go
++++ b/internal/server/udp.go
+@@ -552,7 +552,7 @@ func (s *Server) resolveUDPTarget(endpoint udpwire.Endpoint, viaProxy bool) (udp
+ 	}
+ 	ctx, cancel := context.WithTimeout(s.udpBaseCtx(), udpLookupTimeout)
+ 	defer cancel()
+-	addrs, err := s.targetAddrs(ctx, "ip", endpoint.Host)
++	addrs, err := s.targetAddrs(ctx, "ip", endpoint.Host, int(endpoint.Port))
+ 	if err != nil {
+ 		return udpDialTarget{}, err
+ 	}
+diff --git a/internal/server/udp_test.go b/internal/server/udp_test.go
+index 2aff0339..cd75a170 100644
+--- a/internal/server/udp_test.go
++++ b/internal/server/udp_test.go
+@@ -4,12 +4,24 @@ import (
+ 	"bytes"
+ 	"errors"
+ 	"net"
++	"net/netip"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/openlibrecommunity/olcrtc/internal/udpwire"
+ )
+ 
++func TestExactAllowedUDPTarget(t *testing.T) {
++	allowed := netip.MustParseAddrPort("127.0.0.1:10000")
++	s := &Server{allowedTarget: &allowed}
++	if _, err := s.resolveUDPTarget(udpwire.Endpoint{Host: allowed.Addr().String(), Port: 10000}, false); err != nil {
++		t.Fatalf("allowed UDP target: %v", err)
++	}
++	if _, err := s.resolveUDPTarget(udpwire.Endpoint{Host: allowed.Addr().String(), Port: 10001}, false); !errors.Is(err, errBlockedTarget) {
++		t.Fatalf("another UDP port error = %v, want blocked target", err)
++	}
++}
++
+ const (
+ 	testUDPPeerID        = "peer-1"
+ 	testUDPSessionID     = "session-1"
 diff --git a/internal/transport/transport.go b/internal/transport/transport.go
 index c738ed57..4a050f27 100644
 --- a/internal/transport/transport.go

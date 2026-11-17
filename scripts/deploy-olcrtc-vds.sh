@@ -90,7 +90,12 @@ load_config() {
   ROOM_URLS=()
   ROOM_KEYS=()
   SECRETS=("${VLESS_UUID}" "${PUBLISH_URL}")
-  for provider in MAMBA VKCALLS TELEMOST; do
+  [[ "${TELEMOST_ENABLED:-true}" =~ ^(true|false)$ ]] || die "TELEMOST_ENABLED must be true or false"
+  local -a providers=(MAMBA VKCALLS)
+  if [ "${TELEMOST_ENABLED:-true}" = true ]; then
+    providers+=(TELEMOST)
+  fi
+  for provider in "${providers[@]}"; do
     for index in 1 2 3 4; do
       name="${provider}_URL_${index}"
       require_value "${name}"
@@ -172,6 +177,22 @@ build_local() {
   printf 'built local Linux amd64 olcRTC and staged Xray in %s\n' "${ARTIFACT_DIR}"
 }
 
+vless_target() {
+  local host port
+  host="${VLESS_LISTEN%:*}"
+  host="${host#[}"
+  host="${host%]}"
+  port="${VLESS_LISTEN##*:}"
+  if [ "${host}" = 0.0.0.0 ] || [ "${host}" = :: ]; then
+    host=127.0.0.1
+  fi
+  if [[ "${host}" = *:* ]]; then
+    printf '[%s]:%s\n' "${host}" "${port}"
+  else
+    printf '%s:%s\n' "${host}" "${port}"
+  fi
+}
+
 render_room() {
   local index="$1" engine_provider file
   case "${ROOM_PROVIDERS[$index]}" in
@@ -212,6 +233,7 @@ render_deployment() {
   printf '%s\n' "${template}" > "${ARTIFACT_DIR}/staging/xray.json"
   cp "${REPO_ROOT}/deploy/systemd/ilyukhaline-olcrtc@.service" "${ARTIFACT_DIR}/staging/"
   cp "${REPO_ROOT}/deploy/systemd/ilyukhaline-xray.service" "${ARTIFACT_DIR}/staging/"
+  printf '[Service]\nRestartSec=300s\n' > "${ARTIFACT_DIR}/staging/vk-restart.conf"
   cp "${ARTIFACT_DIR}/olcrtc-linux-amd64" "${ARTIFACT_DIR}/staging/olcrtc"
   cp "${ARTIFACT_DIR}/xray" "${ARTIFACT_DIR}/staging/xray"
 }
@@ -232,7 +254,8 @@ deploy_remote() {
   done
   scp_upload "${REPO_ROOT}/deploy/remote-deploy.sh" "${stage}/remote-deploy.sh"
   ssh_run systemd-run --unit="${unit}" --property=Type=oneshot --property=RemainAfterExit=yes --no-block \
-    bash "${stage}/remote-deploy.sh" "${stage}" "${olcrtc_hash}" "${xray_hash}" "${VLESS_LISTEN##*:}" >/dev/null
+    bash "${stage}/remote-deploy.sh" "${stage}" "${olcrtc_hash}" "${xray_hash}" "${VLESS_LISTEN##*:}" \
+    "$(vless_target)" "${ROOM_LABELS[@],,}" >/dev/null
   for ((attempt = 1; attempt <= 90; attempt++)); do
     state="$(ssh_run systemctl show "${unit}" --property=ActiveState,ExecMainStatus || true)"
     if [[ "${state}" = *ActiveState=failed* ]]; then
@@ -264,32 +287,36 @@ status_remote() {
 }
 
 fetch_bundle() {
-  local destination="$1"
+  local destination="$1" labels remote_script
   : > "${destination}"
   chmod 600 "${destination}"
-  SSH_OUTPUT_FILE="${destination}"
+  labels="${ROOM_LABELS[*],,}"
   # shellcheck disable=SC2016
-  ssh_run '
+  remote_script='
     printf "###XRAY\n"
     cat /etc/ilyukhaline/xray.json
-    for label in m1 m2 m3 m4 v1 v2 v3 v4 t1 t2 t3 t4; do
+    for label in __ROOM_LABELS__; do
       printf "###ROOM %s\n" "${label}"
       cat "/etc/ilyukhaline/${label}.yaml"
     done
   '
+  remote_script="${remote_script//__ROOM_LABELS__/${labels}}"
+  SSH_OUTPUT_FILE="${destination}"
+  ssh_run "${remote_script}"
   unset SSH_OUTPUT_FILE
 }
 
 subscription_remote() {
   [ -n "${OUTPUT}" ] || usage
   [[ "${OUTPUT}" = /* ]] || die "--output must be an absolute path"
-  local work index config group bundle
+  local work index config group bundle profile_count
   declare -a generator_args=()
   work="${ARTIFACT_DIR}/subscription-work"
   rm -rf "${work}"
   mkdir -p "${work}"
   chmod 700 "${work}"
   index=0
+  profile_count=0
   for config in "${CONFIGS[@]}"; do
     CONFIG="${config}"
     load_config
@@ -301,6 +328,11 @@ subscription_remote() {
     bundle="${work}/vds-${index}.bundle"
     fetch_bundle "${bundle}"
     generator_args+=("--vds" "${group}=${bundle}")
+    if [ "${TELEMOST_ENABLED:-true}" = true ]; then
+      profile_count=$((profile_count + 4))
+    else
+      profile_count=$((profile_count + 2))
+    fi
     index=$((index + 1))
   done
   if ! python3 "${REPO_ROOT}/deploy/generate_subscription.py" "${generator_args[@]}" --output "${OUTPUT}"; then
@@ -308,7 +340,7 @@ subscription_remote() {
     die "subscription generation failed"
   fi
   rm -rf "${work}"
-  printf 'generated %s profiles\n' "$((${#CONFIGS[@]} * 4))"
+  printf 'generated %s profiles\n' "${profile_count}"
 }
 
 publish_remote() {

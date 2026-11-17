@@ -5,6 +5,9 @@ stage="$1"
 olcrtc_hash="$2"
 xray_hash="$3"
 vless_port="$4"
+vless_target="$5"
+shift 5
+declare -a room_labels=("$@")
 backup=/var/lib/ilyukhaline/rollback
 trap 'rm -rf "${stage}"' EXIT
 ready=false
@@ -12,7 +15,8 @@ declare -a previous_active=()
 declare -a new_started=()
 declare -a adopted_units=()
 declare -a units=(ilyukhaline-xray.service)
-for label in m1 m2 m3 m4 v1 v2 v3 v4 t1 t2 t3 t4; do
+for label in "${room_labels[@]}"; do
+  [[ "${label}" =~ ^[mvt][1-4]$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
   units+=("ilyukhaline-olcrtc@${label}.service")
 done
 
@@ -27,6 +31,9 @@ rollback() {
   done
   rm -rf /etc/ilyukhaline /opt/ilyukhaline
   rm -f /etc/systemd/system/ilyukhaline-olcrtc@.service /etc/systemd/system/ilyukhaline-xray.service
+  for label in v1 v2 v3 v4; do
+    rm -rf "/etc/systemd/system/ilyukhaline-olcrtc@${label}.service.d"
+  done
   if [ -d "${backup}/etc" ]; then
     cp -a "${backup}/etc" /etc/ilyukhaline
   fi
@@ -92,6 +99,11 @@ for unit in ilyukhaline-olcrtc@.service ilyukhaline-xray.service; do
     cp -a "/etc/systemd/system/${unit}" "${backup}/units/${unit}"
   fi
 done
+for label in v1 v2 v3 v4; do
+  if [ -d "/etc/systemd/system/ilyukhaline-olcrtc@${label}.service.d" ]; then
+    cp -a "/etc/systemd/system/ilyukhaline-olcrtc@${label}.service.d" "${backup}/units/"
+  fi
+done
 for unit in "${units[@]}"; do
   if systemctl is-active --quiet "${unit}"; then
     previous_active+=("${unit}")
@@ -129,6 +141,26 @@ if ((${#adopted_units[@]})); then
   systemctl stop "${adopted_units[@]}" 2>/dev/null || true
 fi
 
+python3 - "${stage}" "${vless_target}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+stage = Path(sys.argv[1])
+target = sys.argv[2]
+pattern = re.compile(r"(?m)^egress:\n(?:[ \t]+.*\n)*")
+replacement = f"egress:\n  allow: '{target}'\n"
+for path in stage.glob("*.yaml"):
+    text = path.read_text()
+    if pattern.search(text):
+        text = pattern.sub(replacement, text, count=1)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += replacement
+    path.write_text(text)
+PY
+
 mkdir -p /opt/ilyukhaline/bin /etc/ilyukhaline /etc/systemd/system
 install -m 755 "${stage}/olcrtc" /opt/ilyukhaline/bin/.olcrtc.new
 mv -f /opt/ilyukhaline/bin/.olcrtc.new /opt/ilyukhaline/bin/olcrtc
@@ -145,6 +177,16 @@ install -m 644 "${stage}/ilyukhaline-olcrtc@.service" /etc/systemd/system/.ilyuk
 mv -f /etc/systemd/system/.ilyukhaline-olcrtc@.service.new /etc/systemd/system/ilyukhaline-olcrtc@.service
 install -m 644 "${stage}/ilyukhaline-xray.service" /etc/systemd/system/.ilyukhaline-xray.service.new
 mv -f /etc/systemd/system/.ilyukhaline-xray.service.new /etc/systemd/system/ilyukhaline-xray.service
+for label in "${room_labels[@]}"; do
+  case "${label}" in
+    v[1-4])
+      dropin="/etc/systemd/system/ilyukhaline-olcrtc@${label}.service.d"
+      mkdir -p "${dropin}"
+      install -m 644 "${stage}/vk-restart.conf" "${dropin}/.restart.conf.new"
+      mv -f "${dropin}/.restart.conf.new" "${dropin}/restart.conf"
+      ;;
+  esac
+done
 
 /opt/ilyukhaline/bin/olcrtc -version >/dev/null
 /opt/ilyukhaline/bin/xray run -test -config /etc/ilyukhaline/xray.json >/dev/null

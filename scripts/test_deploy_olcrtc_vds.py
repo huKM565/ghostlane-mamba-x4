@@ -385,6 +385,12 @@ class DeployLifecycleTest(DeployPreflightTest):
             for room in rooms:
                 self.assertTrue(any(room.encode() in path.read_bytes() for path in etc.glob("*.yaml")))
         self.assertIn('"port": 10000', (etc / "xray.json").read_text())
+        for path in etc.glob("*.yaml"):
+            self.assertIn("egress:\n  allow: '127.0.0.1:10000'\n", path.read_text())
+        unit = self.remote / "etc/systemd/system/ilyukhaline-olcrtc@.service"
+        self.assertIn("RestartSec=30s", unit.read_text())
+        vk_unit = self.remote / "etc/systemd/system/ilyukhaline-olcrtc@v1.service.d/restart.conf"
+        self.assertIn("RestartSec=300s", vk_unit.read_text())
         snapshot = self.managed_snapshot()
         active_before = (self.remote / "active-units").read_bytes()
         second = self.deploy()
@@ -407,8 +413,9 @@ class DeployLifecycleTest(DeployPreflightTest):
         result = self.deploy()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         managed = self.remote / "etc/ilyukhaline"
-        self.assertEqual(m1, (managed / "m1.yaml").read_text())
-        self.assertEqual(v1, (managed / "v1.yaml").read_text())
+        egress = "egress:\n  allow: '127.0.0.1:10000'\n"
+        self.assertEqual(m1 + egress, (managed / "m1.yaml").read_text())
+        self.assertEqual(v1 + egress, (managed / "v1.yaml").read_text())
         self.assertFalse((managed / "m1-extra.yaml").exists())
         self.assertFalse((managed / "v1-extra.yaml").exists())
         systemctl = (self.remote / "systemctl.log").read_text()
@@ -486,7 +493,7 @@ class DeployLifecycleTest(DeployPreflightTest):
 
 
 class SubscriptionTest(DeployLifecycleTest):
-    def prepare_second_vds(self):
+    def prepare_second_vds(self, telemost=True):
         changes = {
             "SSH_TARGET": "root@192.0.2.20",
             "ARTIFACT_DIR": str(self.root / "artifacts-fi"),
@@ -494,6 +501,7 @@ class SubscriptionTest(DeployLifecycleTest):
             "PUBLISH_URL": "https://finland.example.invalid/finland.txt",
             "VLESS_UUID": "22222222-2222-2222-2222-222222222222",
             "VLESS_LISTEN": "127.0.0.1:10001",
+            "TELEMOST_ENABLED": "true" if telemost else "false",
         }
         for provider in ("MAMBA", "VKCALLS", "TELEMOST"):
             for index in range(1, 5):
@@ -551,6 +559,43 @@ class SubscriptionTest(DeployLifecycleTest):
             self.assertGreaterEqual(body.count(value), 2)
         expected = HERE.parent / "deploy/testdata/subscription.expected.txt"
         self.assertEqual(expected.read_text(), body)
+
+    def test_finland_without_telemost_deploys_eight_rooms_and_two_profiles(self):
+        self.build()
+        self.assertEqual(0, self.deploy().returncode)
+        self.prepare_second_vds(telemost=False)
+        self.output = self.root / "subscription.txt"
+        result = self.run_script(
+            "--config", str(self.config),
+            "--config", str(self.second_config),
+            "subscription", "--output", str(self.output),
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        primary = [line for line in self.output.read_text().splitlines() if line.startswith("olcrtc://")]
+        expected_names = [
+            "Германия — Mamba 4x",
+            "Германия — VK 4x",
+            "Германия — Телемост 4x",
+            "Германия — Multi 12x",
+            "Финляндия — Mamba 4x",
+            "Финляндия — VK 4x",
+        ]
+        self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
+        self.assertIn("generated 6 profiles", result.stdout)
+        self.assertFalse((self.remote2 / "etc/ilyukhaline/t1.yaml").exists())
+        active = (self.remote2 / "active-units").read_text()
+        self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)
+        self.assertEqual(9, len(active.splitlines()))
+
+    def test_subscription_fields_strip_supported_yaml_quotes(self):
+        spec = importlib.util.spec_from_file_location(
+            "subscription_generator", HERE.parent / "deploy/generate_subscription.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for value in ("value", "'value'", '"value"'):
+            with self.subTest(value=value):
+                self.assertEqual("value", module.field(f"crypto:\n  key: {value}\n", "key"))
 
     def test_adopted_homogeneous_keys_use_full_links(self):
         spec = importlib.util.spec_from_file_location(
