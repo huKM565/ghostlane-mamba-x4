@@ -490,6 +490,29 @@ class DeployLifecycleTest(DeployPreflightTest):
         secrets.extend(value for key, value in values.items() if "_KEY_" in key or "_URL_" in key)
         for secret in secrets:
             self.assertNotIn(secret, result.stdout + result.stderr)
+    def test_disabling_telemost_removes_only_its_managed_rooms(self):
+        self.build()
+        self.assertEqual(0, self.deploy().returncode)
+        managed = self.remote / "etc/ilyukhaline"
+        m1 = (managed / "m1.yaml").read_bytes()
+        v1 = (managed / "v1.yaml").read_bytes()
+        self.write_config({"TELEMOST_ENABLED": "false"})
+        systemctl_log = self.remote / "systemctl.log"
+        systemctl_log.write_text("")
+
+        self.assertEqual(0, self.deploy().returncode)
+
+        self.assertEqual(m1, (managed / "m1.yaml").read_bytes())
+        self.assertEqual(v1, (managed / "v1.yaml").read_bytes())
+        self.assertNotIn("restart ilyukhaline-olcrtc@m1.service", systemctl_log.read_text())
+        self.assertNotIn("restart ilyukhaline-olcrtc@v1.service", systemctl_log.read_text())
+        self.assertNotIn("restart ilyukhaline-xray.service", systemctl_log.read_text())
+        self.assertFalse((managed / "t1.yaml").exists())
+        self.assertFalse((managed / "t4.yaml").exists())
+        active = (self.remote / "active-units").read_text()
+        self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)
+        self.assertNotIn("ilyukhaline-olcrtc@t4.service", active)
+        self.assertEqual(9, len(active.splitlines()))
 
 
 class SubscriptionTest(DeployLifecycleTest):
@@ -560,7 +583,7 @@ class SubscriptionTest(DeployLifecycleTest):
         expected = HERE.parent / "deploy/testdata/subscription.expected.txt"
         self.assertEqual(expected.read_text(), body)
 
-    def test_finland_without_telemost_deploys_eight_rooms_and_two_profiles(self):
+    def test_finland_without_telemost_deploys_eight_rooms_and_three_profiles(self):
         self.build()
         self.assertEqual(0, self.deploy().returncode)
         self.prepare_second_vds(telemost=False)
@@ -579,9 +602,10 @@ class SubscriptionTest(DeployLifecycleTest):
             "Германия — Multi 12x",
             "Финляндия — Mamba 4x",
             "Финляндия — VK 4x",
+            "Финляндия — Multi 8x",
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
-        self.assertIn("generated 6 profiles", result.stdout)
+        self.assertIn("generated 7 profiles", result.stdout)
         self.assertFalse((self.remote2 / "etc/ilyukhaline/t1.yaml").exists())
         active = (self.remote2 / "active-units").read_text()
         self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)

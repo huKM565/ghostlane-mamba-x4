@@ -90,8 +90,8 @@ def render_group(group, rooms, vless):
             output.extend(f"##bond-room: {olc_link(room)}" for room in selected[1:])
         output.append(f"##bond-vless: {bond_vless}")
     ordered = [rooms[label] for label in LABELS if label in rooms]
-    if len(ordered) == 12:
-        output.append(olc_link(ordered[0], f"{group} — Multi 12x"))
+    if len(ordered) in (8, 12):
+        output.append(olc_link(ordered[0], f"{group} — Multi {len(ordered)}x"))
         output.append(f"##group: {group}")
         output.extend(f"##bond-room: {olc_link(room)}" for room in ordered[1:])
         output.append(f"##bond-vless: {bond_vless}")

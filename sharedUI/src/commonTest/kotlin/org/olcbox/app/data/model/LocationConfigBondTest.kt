@@ -117,6 +117,14 @@ class LocationConfigBondTest {
     }
 
     @Test
+    fun eightMixedRoomsFormAValidBond() {
+        val config = bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(8))
+
+        assertTrue(config.isComplete())
+        assertEquals(8, config.bondedPaths().size)
+    }
+
+    @Test
     fun bondRequiresPlainTcpVless() {
         assertFalse(bondedConfig(link = VLESS_LINK.replace("security=none", "security=tls")).isComplete())
         assertFalse(bondedConfig(link = VLESS_LINK.replace("encryption=none", "type=ws&security=none")).isComplete())

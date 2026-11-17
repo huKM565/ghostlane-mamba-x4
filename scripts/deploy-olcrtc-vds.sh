@@ -331,7 +331,7 @@ subscription_remote() {
     if [ "${TELEMOST_ENABLED:-true}" = true ]; then
       profile_count=$((profile_count + 4))
     else
-      profile_count=$((profile_count + 2))
+      profile_count=$((profile_count + 3))
     fi
     index=$((index + 1))
   done

@@ -8,11 +8,12 @@ import kotlin.test.assertTrue
 
 class OlcRtcBondTest {
     @Test
-    fun bondRequiresExactlyFourOrTwelveRuntimes() {
+    fun bondRequiresFourEightOrTwelveRuntimes() {
         assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(3)) }
         assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(5)) }
         assertFailsWith<IllegalArgumentException> { OlcRtcBond(fakes(13)) }
         OlcRtcBond(fakes(4))
+        OlcRtcBond(fakes(8))
         OlcRtcBond(fakes(12))
     }
 

@@ -14,10 +14,17 @@ ready=false
 declare -a previous_active=()
 declare -a new_started=()
 declare -a adopted_units=()
+declare -a stale_units=()
+declare -a stale_active=()
 declare -a units=(ilyukhaline-xray.service)
 for label in "${room_labels[@]}"; do
   [[ "${label}" =~ ^[mvt][1-4]$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
   units+=("ilyukhaline-olcrtc@${label}.service")
+done
+for label in t1 t2 t3 t4; do
+  if [[ " ${room_labels[*]} " != *" ${label} "* ]]; then
+    stale_units+=("ilyukhaline-olcrtc@${label}.service")
+  fi
 done
 
 rollback() {
@@ -45,6 +52,10 @@ rollback() {
   fi
   systemctl daemon-reload
   for unit in "${previous_active[@]}"; do
+    systemctl restart "${unit}"
+  done
+  for unit in "${stale_active[@]}"; do
+    systemctl enable "${unit}"
     systemctl restart "${unit}"
   done
   for unit in "${adopted_units[@]}"; do
@@ -111,6 +122,11 @@ for unit in "${units[@]}"; do
     new_started+=("${unit}")
   fi
 done
+for unit in "${stale_units[@]}"; do
+  if systemctl is-active --quiet "${unit}"; then
+    stale_active+=("${unit}")
+  fi
+done
 ready=true
 
 for index in 1 2 3 4; do
@@ -139,6 +155,11 @@ fi
 if ((${#adopted_units[@]})); then
   systemctl disable "${adopted_units[@]}" 2>/dev/null || true
   systemctl stop "${adopted_units[@]}" 2>/dev/null || true
+fi
+if ((${#stale_units[@]})); then
+  systemctl disable "${stale_units[@]}" 2>/dev/null || true
+  systemctl stop "${stale_units[@]}" 2>/dev/null || true
+  rm -f /etc/ilyukhaline/t1.yaml /etc/ilyukhaline/t2.yaml /etc/ilyukhaline/t3.yaml /etc/ilyukhaline/t4.yaml
 fi
 
 python3 - "${stage}" "${vless_target}" <<'PY'
@@ -193,6 +214,18 @@ done
 systemctl daemon-reload
 for unit in "${units[@]}"; do
   systemctl enable "${unit}" >/dev/null
+  keep_active=false
+  if ((${#stale_active[@]})); then
+    for previous in "${previous_active[@]}"; do
+      if [ "${unit}" = "${previous}" ]; then
+        keep_active=true
+        break
+      fi
+    done
+  fi
+  if [ "${keep_active}" = true ]; then
+    continue
+  fi
   systemctl restart "${unit}"
 done
 trap - ERR
