@@ -494,18 +494,19 @@ class SubscriptionTest(DeployLifecycleTest):
 
     def test_publish_installs_only_private_file_and_nginx_location(self):
         body = self.generate()
-        nginx = self.remote / "etc/nginx/sites-enabled/default"
+        self.write_config({"PUBLISH_SSH_TARGET": "root@192.0.2.20"})
+        nginx = self.remote2 / "etc/nginx/sites-enabled/default"
         nginx.parent.mkdir(parents=True, exist_ok=True)
         nginx.write_text("server {\n  listen 443 ssl;\n  server_name example.invalid;\n}\n")
         result = self.run_script("--config", str(self.config), "publish", "--input", str(self.output))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        published = self.remote / "var/www/ilyukhaline/private.txt"
+        published = self.remote2 / "var/www/ilyukhaline/private.txt"
         self.assertEqual(body, published.read_text())
         self.assertEqual(0o600, published.stat().st_mode & 0o777)
-        snippet = self.remote / "etc/nginx/snippets/ilyukhaline-subscription.conf"
+        snippet = self.remote2 / "etc/nginx/snippets/ilyukhaline-subscription.conf"
         self.assertIn("autoindex off;", snippet.read_text())
         self.assertIn("location = /private.txt", snippet.read_text())
-        self.assertIn(f"include {self.remote}/etc/nginx/snippets/ilyukhaline-subscription.conf;", nginx.read_text())
+        self.assertIn(f"include {self.remote2}/etc/nginx/snippets/ilyukhaline-subscription.conf;", nginx.read_text())
         self.assertNotIn(self.values()["VLESS_UUID"], result.stdout + result.stderr)
         self.assertNotIn(body, result.stdout + result.stderr)
 

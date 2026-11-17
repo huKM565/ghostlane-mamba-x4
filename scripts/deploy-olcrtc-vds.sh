@@ -66,6 +66,9 @@ load_config() {
     require_value "${name}"
   done
   [[ "${SSH_TARGET}" =~ ^root@[A-Za-z0-9._:-]+$ ]] || die "SSH_TARGET must be root@host"
+  if [ -n "${PUBLISH_SSH_TARGET:-}" ]; then
+    [[ "${PUBLISH_SSH_TARGET}" =~ ^root@[A-Za-z0-9._:-]+$ ]] || die "PUBLISH_SSH_TARGET must be root@host"
+  fi
   [[ "${ARTIFACT_DIR}" = /* && "${ARTIFACT_DIR}" != *[[:space:]]* ]] || die "ARTIFACT_DIR must be an absolute path without whitespace"
   [[ "${PUBLISH_PATH}" =~ ^/var/www/ilyukhaline/[A-Za-z0-9/._-]+$ && "${PUBLISH_PATH}" != *..* ]] || die "PUBLISH_PATH must be an escaped path under /var/www/ilyukhaline"
   [[ "${PUBLISH_URL}" =~ ^https://[^/[:space:]]+/[^?#[:space:]]+$ ]] || die "PUBLISH_URL must be an HTTPS URL without query or fragment"
@@ -288,6 +291,7 @@ subscription_remote() {
 publish_remote() {
   [ -n "${INPUT}" ] || usage
   [ -f "${INPUT}" ] || die "generated subscription not found"
+  SSH_TARGET="${PUBLISH_SSH_TARGET:-${SSH_TARGET}}"
   local without_scheme host uri template stage
   without_scheme="${PUBLISH_URL#https://}"
   host="${without_scheme%%/*}"
