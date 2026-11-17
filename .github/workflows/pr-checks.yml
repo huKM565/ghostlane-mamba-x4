@@ -430,8 +430,8 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          shellcheck -x scripts/olcrtc-pin.sh scripts/gate-*.sh scripts/deploy-olcrtc-vds.sh
-          for f in scripts/olcrtc-pin.sh scripts/gate-*.sh scripts/deploy-olcrtc-vds.sh; do bash -n "$f"; done
+          shellcheck -x scripts/olcrtc-pin.sh scripts/gate-*.sh scripts/deploy-olcrtc-vds.sh deploy/remote-deploy.sh
+          for f in scripts/olcrtc-pin.sh scripts/gate-*.sh scripts/deploy-olcrtc-vds.sh deploy/remote-deploy.sh; do bash -n "$f"; done
 
   apple-compile:
     # On a change to the shared Kotlin, and on request. Anything else would
