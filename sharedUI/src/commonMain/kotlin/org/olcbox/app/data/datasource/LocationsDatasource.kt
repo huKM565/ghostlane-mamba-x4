@@ -1817,7 +1817,9 @@ class LocationsRepositoryImpl(
             ip = fields["ip"],
             comment = fields["comment"],
             mimo = mimo,
-            subscription = subscription,
+            subscription = fields["group"]?.trim()?.takeIf { it.isNotEmpty() }?.let { group ->
+                (subscription ?: SubscriptionMetadata()).copy(name = group)
+            } ?: subscription,
             requestedTransport = requestedTransport
         ).normalized().takeUnless { it.isEmpty() }
     }

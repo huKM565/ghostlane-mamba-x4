@@ -2841,7 +2841,7 @@ class LocationsRepositoryImplTest {
         assertTrue(report.selectionChanged, "the selection moved off a server that went, and the refresh did not say so")
     }
 
-    private class FakeLocationsDataSource(
+    internal class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),
         private val legacyActive: String? = null

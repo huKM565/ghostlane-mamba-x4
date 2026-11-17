@@ -18,17 +18,20 @@ if os.environ.get("FAKE_SSH_EXIT"):
     sys.stderr.write("remote rejected " + os.environ.get("FAKE_SECRET", "") + "\n")
     sys.exit(int(os.environ["FAKE_SSH_EXIT"]))
 if os.environ.get("FAKE_REMOTE_ROOT") and "== OS ==" not in sys.argv[-1]:
-    root = Path(os.environ["FAKE_REMOTE_ROOT"])
+    target = next(argument for argument in sys.argv if argument.startswith("root@"))
+    root_name = "FAKE_REMOTE_ROOT_2" if target == "root@192.0.2.20" and os.environ.get("FAKE_REMOTE_ROOT_2") else "FAKE_REMOTE_ROOT"
+    root = Path(os.environ[root_name])
     stdin_mode = "-s" in sys.argv
     target_index = next(index for index, argument in enumerate(sys.argv) if argument.startswith("root@"))
     command = sys.stdin.read() if stdin_mode else " ".join(sys.argv[target_index + 1:])
-    for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/tmp/ilyukhaline"):
+    for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
         command = command.replace(prefix, str(root) + prefix)
     env = os.environ.copy()
+    env["FAKE_REMOTE_ROOT"] = str(root)
     env["PATH"] = str(root / "remote-bin") + os.pathsep + env["PATH"]
     if stdin_mode:
         arguments = sys.argv[sys.argv.index("-s") + 1:]
-        arguments[0] = str(root) + arguments[0]
+        arguments = [str(root) + argument if argument.startswith("/") else argument for argument in arguments]
         result = subprocess.run(["bash", "-s", *arguments], input=command, text=True, env=env)
     else:
         result = subprocess.run(["bash", "-c", command], env=env)
@@ -48,10 +51,11 @@ import shutil
 import sys
 from pathlib import Path
 source = Path(sys.argv[-2])
-target = sys.argv[-1].split(":", 1)[1]
-for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/tmp/ilyukhaline"):
+host, target = sys.argv[-1].split(":", 1)
+root_name = "FAKE_REMOTE_ROOT_2" if host == "root@192.0.2.20" and os.environ.get("FAKE_REMOTE_ROOT_2") else "FAKE_REMOTE_ROOT"
+for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
     if target.startswith(prefix):
-        target = os.environ["FAKE_REMOTE_ROOT"] + target
+        target = os.environ[root_name] + target
         break
 path = Path(target)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +137,11 @@ class DeployPreflightTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def install_fake_nginx(self, root):
+        nginx = root / "remote-bin/nginx"
+        nginx.write_text("#!/usr/bin/env sh\nexit \"${FAKE_NGINX_EXIT:-0}\"\n")
+        nginx.chmod(0o755)
+
     def enable_remote(self):
         self.remote = self.root / "remote"
         remote_bin = self.remote / "remote-bin"
@@ -140,6 +149,7 @@ class DeployPreflightTest(unittest.TestCase):
         systemctl = remote_bin / "systemctl"
         systemctl.write_text(FAKE_SYSTEMCTL)
         systemctl.chmod(0o755)
+        self.install_fake_nginx(self.remote)
         mage = self.bin / "mage"
         mage.write_text(FAKE_MAGE)
         mage.chmod(0o755)
@@ -169,14 +179,21 @@ class DeployPreflightTest(unittest.TestCase):
             "VLESS_LISTEN": "127.0.0.1:10000",
             "OLCRTC_SOURCE": str(self.root / "source"),
             "XRAY_BINARY": str(self.root / "xray"),
+            "NGINX_SERVER_FILE": "/etc/nginx/sites-enabled/default",
         }
+        key_patterns = {"MAMBA": "01", "VKCALLS": "02", "TELEMOST": "03"}
         for index in range(1, 5):
             result[f"MAMBA_URL_{index}"] = f"https://mamba.example.invalid/room-{index}"
             result[f"VKCALLS_URL_{index}"] = f"https://vk.com/call/join/fake-room-{index}"
             result[f"TELEMOST_URL_{index}"] = f"https://telemost.yandex.ru/j/permanent-room-{index}"
             for provider in ("MAMBA", "VKCALLS", "TELEMOST"):
-                result[f"{provider}_KEY_{index}"] = f"{index:02d}" * 32
+                result[f"{provider}_KEY_{index}"] = key_patterns[provider] * 32
         return result
+
+    def config_text(self, changes):
+        values = self.values()
+        values.update(changes)
+        return "".join(f"{key}='{value}'\n" for key, value in values.items())
 
     def write_config(self, changes, remove=()):
         values = self.values()
@@ -227,6 +244,9 @@ class DeployPreflightTest(unittest.TestCase):
             {"MAMBA_URL_2": self.values()["MAMBA_URL_1"]},
             expected="duplicate",
         )
+
+    def test_homogeneous_rooms_require_one_shared_key(self):
+        self.assert_invalid({"MAMBA_KEY_2": "ff" * 32}, expected="keys must match")
 
     def test_vless_must_listen_on_loopback(self):
         self.assert_invalid({"VLESS_LISTEN": "0.0.0.0:10000"}, expected="loopback")
@@ -362,6 +382,98 @@ class DeployLifecycleTest(DeployPreflightTest):
         secrets.extend(value for key, value in values.items() if "_KEY_" in key or "_URL_" in key)
         for secret in secrets:
             self.assertNotIn(secret, result.stdout + result.stderr)
+
+
+class SubscriptionTest(DeployLifecycleTest):
+    def prepare_second_vds(self):
+        changes = {
+            "SSH_TARGET": "root@192.0.2.20",
+            "ARTIFACT_DIR": str(self.root / "artifacts-fi"),
+            "PUBLISH_PATH": "/var/www/ilyukhaline/finland.txt",
+            "PUBLISH_URL": "https://finland.example.invalid/finland.txt",
+            "VLESS_UUID": "22222222-2222-2222-2222-222222222222",
+            "VLESS_LISTEN": "127.0.0.1:10001",
+        }
+        for provider in ("MAMBA", "VKCALLS", "TELEMOST"):
+            for index in range(1, 5):
+                key = f"{provider}_URL_{index}"
+                changes[key] = self.values()[key] + "-fi"
+        self.second_config = self.root / "finland.conf"
+        self.second_config.write_text(self.config_text(changes))
+        self.remote2 = self.root / "remote-fi"
+        remote_bin = self.remote2 / "remote-bin"
+        remote_bin.mkdir(parents=True)
+        systemctl = remote_bin / "systemctl"
+        systemctl.write_text(FAKE_SYSTEMCTL)
+        systemctl.chmod(0o755)
+        self.install_fake_nginx(self.remote2)
+        self.env["FAKE_REMOTE_ROOT_2"] = str(self.remote2)
+        for command in ("build", "deploy"):
+            result = self.run_script("--config", str(self.second_config), command)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def generate(self):
+        self.build()
+        self.assertEqual(0, self.deploy().returncode)
+        self.prepare_second_vds()
+        (self.remote / "etc/ilyukhaline/unmanaged.yaml").write_text("room: unmanaged\n")
+        self.output = self.root / "subscription.txt"
+        result = self.run_script(
+            "--config", str(self.config),
+            "--config", str(self.second_config),
+            "subscription", "--output", str(self.output),
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("olcrtc://", result.stdout + result.stderr)
+        return self.output.read_text()
+
+    def test_subscription_has_exact_groups_profiles_paths_and_snapshot(self):
+        body = self.generate()
+        primary = [line for line in body.splitlines() if line.startswith("olcrtc://")]
+        self.assertEqual(8, len(primary))
+        expected_names = [
+            f"{group} — {profile}"
+            for group in ("Германия", "Финляндия")
+            for profile in ("Mamba 4x", "VK 4x", "Телемост 4x", "Multi 12x")
+        ]
+        self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
+        self.assertEqual(8, body.count("##group: "))
+        self.assertEqual(6, body.count("##rooms: "))
+        self.assertEqual(22, body.count("##bond-room: "))
+        self.assertEqual(0o600, self.output.stat().st_mode & 0o777)
+        self.assertNotIn("unmanaged", body)
+        for values in (self.values(), self.values()):
+            for key, value in values.items():
+                if "_URL_" in key:
+                    self.assertGreaterEqual(body.count(value), 2)
+        for value in ("room-1-fi", "fake-room-1-fi", "permanent-room-1-fi"):
+            self.assertGreaterEqual(body.count(value), 2)
+        expected = HERE.parent / "deploy/testdata/subscription.expected.txt"
+        self.assertEqual(expected.read_text(), body)
+
+    def test_publish_installs_only_private_file_and_nginx_location(self):
+        body = self.generate()
+        nginx = self.remote / "etc/nginx/sites-enabled/default"
+        nginx.parent.mkdir(parents=True, exist_ok=True)
+        nginx.write_text("server {\n  listen 443 ssl;\n  server_name example.invalid;\n}\n")
+        result = self.run_script("--config", str(self.config), "publish", "--input", str(self.output))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        published = self.remote / "var/www/ilyukhaline/private.txt"
+        self.assertEqual(body, published.read_text())
+        self.assertEqual(0o600, published.stat().st_mode & 0o777)
+        snippet = self.remote / "etc/nginx/snippets/ilyukhaline-subscription.conf"
+        self.assertIn("autoindex off;", snippet.read_text())
+        self.assertIn("location = /private.txt", snippet.read_text())
+        self.assertIn(f"include {self.remote}/etc/nginx/snippets/ilyukhaline-subscription.conf;", nginx.read_text())
+        self.assertNotIn(self.values()["VLESS_UUID"], result.stdout + result.stderr)
+        self.assertNotIn(body, result.stdout + result.stderr)
+
+    def test_publish_rejects_missing_input_and_unescaped_path(self):
+        missing = self.run_script("--config", str(self.config), "publish", "--input", str(self.root / "missing"))
+        self.assertNotEqual(0, missing.returncode)
+        self.write_config({"PUBLISH_PATH": "/var/www/ilyukhaline/../private.txt"})
+        result = self.run_script("--config", str(self.config), "check")
+        self.assertNotEqual(0, result.returncode)
 
 
 if __name__ == "__main__":

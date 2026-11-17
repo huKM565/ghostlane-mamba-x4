@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG=""
 COMMAND=""
+OUTPUT=""
+INPUT=""
+declare -a CONFIGS=()
 declare -a SECRETS=()
 declare -a ROOM_PROVIDERS=()
 declare -a ROOM_TRANSPORTS=()
@@ -13,7 +16,7 @@ declare -a ROOM_URLS=()
 declare -a ROOM_KEYS=()
 
 usage() {
-  printf 'usage: %s --config FILE check|build|deploy|subscription|publish|status\n' "${0##*/}" >&2
+  printf 'usage: %s --config FILE [--config FILE] check|build|deploy|status|subscription --output FILE|publish --input FILE\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -35,7 +38,11 @@ die() {
 }
 
 ssh_run() {
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "${SSH_TARGET}" "$@" 2> >(redact >&2) | redact
+  if [ -n "${SSH_OUTPUT_FILE:-}" ]; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "${SSH_TARGET}" "$@" > "${SSH_OUTPUT_FILE}" 2> >(redact >&2)
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "${SSH_TARGET}" "$@" 2> >(redact >&2) | redact
+  fi
 }
 
 scp_upload() {
@@ -54,14 +61,15 @@ load_config() {
   # shellcheck source=/dev/null
   . "${CONFIG}"
 
-  local name provider index url key previous other port
-  for name in SSH_TARGET ARTIFACT_DIR PUBLISH_PATH PUBLISH_URL VLESS_UUID VLESS_LISTEN OLCRTC_SOURCE XRAY_BINARY; do
+  local name provider index url key previous other other_key port
+  for name in SSH_TARGET ARTIFACT_DIR PUBLISH_PATH PUBLISH_URL NGINX_SERVER_FILE VLESS_UUID VLESS_LISTEN OLCRTC_SOURCE XRAY_BINARY; do
     require_value "${name}"
   done
   [[ "${SSH_TARGET}" =~ ^root@[A-Za-z0-9._:-]+$ ]] || die "SSH_TARGET must be root@host"
   [[ "${ARTIFACT_DIR}" = /* && "${ARTIFACT_DIR}" != *[[:space:]]* ]] || die "ARTIFACT_DIR must be an absolute path without whitespace"
-  [[ "${PUBLISH_PATH}" = /* && "${PUBLISH_PATH}" != *[[:space:]]* ]] || die "PUBLISH_PATH must be an absolute path without whitespace"
-  [[ "${PUBLISH_URL}" = https://* ]] || die "PUBLISH_URL must use HTTPS"
+  [[ "${PUBLISH_PATH}" =~ ^/var/www/ilyukhaline/[A-Za-z0-9/._-]+$ && "${PUBLISH_PATH}" != *..* ]] || die "PUBLISH_PATH must be an escaped path under /var/www/ilyukhaline"
+  [[ "${PUBLISH_URL}" =~ ^https://[^/[:space:]]+/[^?#[:space:]]+$ ]] || die "PUBLISH_URL must be an HTTPS URL without query or fragment"
+  [[ "${NGINX_SERVER_FILE}" = /* && "${NGINX_SERVER_FILE}" != *[[:space:]]* ]] || die "NGINX_SERVER_FILE must be an absolute path without whitespace"
   [[ "${VLESS_UUID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || die "VLESS_UUID is not a UUID"
   [[ "${VLESS_LISTEN}" =~ ^(127\.0\.0\.1|\[::1\]):[0-9]+$ ]] || die "VLESS_LISTEN must use a loopback address"
   [[ "${OLCRTC_SOURCE}" = /* ]] || die "OLCRTC_SOURCE must be an absolute path"
@@ -74,7 +82,7 @@ load_config() {
   ROOM_LABELS=()
   ROOM_URLS=()
   ROOM_KEYS=()
-  SECRETS=("${VLESS_UUID}")
+  SECRETS=("${VLESS_UUID}" "${PUBLISH_URL}")
   for provider in MAMBA VKCALLS TELEMOST; do
     for index in 1 2 3 4; do
       name="${provider}_URL_${index}"
@@ -83,7 +91,7 @@ load_config() {
       name="${provider}_KEY_${index}"
       require_value "${name}"
       key="${!name}"
-      [[ "${url}" = https://* && "${url}" != *"'"* ]] || die "${provider}_URL_${index} must be an HTTPS URL without a single quote"
+      [[ "${url}" = https://* && "${url}" != *"'"* && "${url}" != *"#"* ]] || die "${provider}_URL_${index} must be an HTTPS URL without quotes or a fragment"
       [[ "${key}" =~ ^[0-9a-fA-F]{64}$ ]] || die "${provider}_KEY_${index} must be 64 hexadecimal characters"
       if [ "${provider}" = TELEMOST ]; then
         [[ "${url}" =~ ^https://telemost\.yandex\.ru/j/[A-Za-z0-9_-]+$ ]] ||
@@ -92,7 +100,9 @@ load_config() {
       for previous in 1 2 3 4; do
         if ((previous < index)); then
           other="${provider}_URL_${previous}"
+          other_key="${provider}_KEY_${previous}"
           [ "${url}" != "${!other}" ] || die "duplicate ${provider} room URL at indexes ${previous} and ${index}"
+          [ "${key}" = "${!other_key}" ] || die "${provider} keys must match for the ##rooms subscription format"
         fi
       done
       ROOM_PROVIDERS+=("${provider,,}")
@@ -227,11 +237,90 @@ status_remote() {
   printf 'Xray %s health=%s\n' "${xray_state:-unknown}" "$(ssh_run /opt/ilyukhaline/bin/xray run -test -config /etc/ilyukhaline/xray.json >/dev/null && printf ok || printf failed)"
 }
 
+fetch_bundle() {
+  local destination="$1"
+  : > "${destination}"
+  chmod 600 "${destination}"
+  SSH_OUTPUT_FILE="${destination}"
+  # shellcheck disable=SC2016
+  ssh_run '
+    printf "###XRAY\n"
+    cat /etc/ilyukhaline/xray.json
+    for label in m1 m2 m3 m4 v1 v2 v3 v4 t1 t2 t3 t4; do
+      printf "###ROOM %s\n" "${label}"
+      cat "/etc/ilyukhaline/${label}.yaml"
+    done
+  '
+  unset SSH_OUTPUT_FILE
+}
+
+subscription_remote() {
+  [ -n "${OUTPUT}" ] || usage
+  [[ "${OUTPUT}" = /* ]] || die "--output must be an absolute path"
+  local work index config group bundle
+  declare -a generator_args=()
+  work="${ARTIFACT_DIR}/subscription-work"
+  rm -rf "${work}"
+  mkdir -p "${work}"
+  chmod 700 "${work}"
+  index=0
+  for config in "${CONFIGS[@]}"; do
+    CONFIG="${config}"
+    load_config
+    if ((index == 0)); then
+      group=Германия
+    else
+      group=Финляндия
+    fi
+    bundle="${work}/vds-${index}.bundle"
+    fetch_bundle "${bundle}"
+    generator_args+=("--vds" "${group}=${bundle}")
+    index=$((index + 1))
+  done
+  if ! python3 "${REPO_ROOT}/deploy/generate_subscription.py" "${generator_args[@]}" --output "${OUTPUT}"; then
+    rm -rf "${work}"
+    die "subscription generation failed"
+  fi
+  rm -rf "${work}"
+  printf 'generated %s profiles\n' "$((${#CONFIGS[@]} * 4))"
+}
+
+publish_remote() {
+  [ -n "${INPUT}" ] || usage
+  [ -f "${INPUT}" ] || die "generated subscription not found"
+  local without_scheme host uri template stage
+  without_scheme="${PUBLISH_URL#https://}"
+  host="${without_scheme%%/*}"
+  uri="/${without_scheme#*/}"
+  [ "${PUBLISH_PATH}" = "/var/www/ilyukhaline${uri}" ] || die "PUBLISH_PATH does not match the HTTPS path"
+  template="$(<"${REPO_ROOT}/deploy/nginx-ilyukhaline-subscription.conf.template")"
+  template="${template//__PUBLISH_URI__/${uri}}"
+  template="${template//__PUBLISH_PATH__/${PUBLISH_PATH}}"
+  stage="/tmp/ilyukhaline/publish-$$"
+  ssh_run "rm -rf '${stage}' && mkdir -p '${stage}' && chmod 700 '${stage}'" >/dev/null
+  printf '%s\n' "${template}" > "${ARTIFACT_DIR}/subscription.conf"
+  chmod 600 "${ARTIFACT_DIR}/subscription.conf"
+  scp_upload "${INPUT}" "${stage}/subscription.txt"
+  scp_upload "${ARTIFACT_DIR}/subscription.conf" "${stage}/subscription.conf"
+  rm -f "${ARTIFACT_DIR}/subscription.conf"
+  ssh_run bash -s "${stage}" "${PUBLISH_PATH}" "${NGINX_SERVER_FILE}" "${host}" < "${REPO_ROOT}/deploy/remote-publish.sh"
+}
+
 while (($#)); do
   case "$1" in
     --config)
       (($# >= 2)) || usage
-      CONFIG="$2"
+      CONFIGS+=("$2")
+      shift 2
+      ;;
+    --output)
+      (($# >= 2)) || usage
+      OUTPUT="$2"
+      shift 2
+      ;;
+    --input)
+      (($# >= 2)) || usage
+      INPUT="$2"
       shift 2
       ;;
     check|build|deploy|subscription|publish|status)
@@ -242,13 +331,19 @@ while (($#)); do
     *) usage ;;
   esac
 done
-[ -n "${CONFIG}" ] && [ -n "${COMMAND}" ] || usage
+[ "${#CONFIGS[@]}" -ge 1 ] && [ -n "${COMMAND}" ] || usage
+[ "${#CONFIGS[@]}" -le 2 ] || usage
+if [ "${COMMAND}" != subscription ] && [ "${#CONFIGS[@]}" -ne 1 ]; then
+  usage
+fi
 
+CONFIG="${CONFIGS[0]}"
 load_config
 case "${COMMAND}" in
   check) check_remote ;;
   build) build_local ;;
   deploy) deploy_remote ;;
   status) status_remote ;;
-  *) die "${COMMAND} is not implemented yet" ;;
+  subscription) subscription_remote ;;
+  publish) publish_remote ;;
 esac
