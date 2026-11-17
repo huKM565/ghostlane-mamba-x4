@@ -549,6 +549,32 @@ class SubscriptionTest(DeployLifecycleTest):
         expected = HERE.parent / "deploy/testdata/subscription.expected.txt"
         self.assertEqual(expected.read_text(), body)
 
+    def test_adopted_homogeneous_keys_use_full_links(self):
+        spec = importlib.util.spec_from_file_location(
+            "subscription_generator", HERE.parent / "deploy/generate_subscription.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        rooms = {}
+        for label in module.LABELS:
+            provider = {"m": "jitsi", "v": "vkcalls", "t": "telemost"}[label[0]]
+            rooms[label] = {
+                "provider": provider,
+                "room": label,
+                "key": "a" * 64,
+                "transport": "datachannel" if label[0] == "m" else "vp8channel",
+            }
+        rooms["v1"]["key"] = "b" * 64
+        vless = {"host": "127.0.0.1", "port": 10000, "id": "11111111-1111-1111-1111-111111111111"}
+
+        lines = module.render_group("Германия", rooms, vless)
+        start = next(index for index, line in enumerate(lines) if line.endswith("$Германия — VK 4x"))
+        end = next(index for index, line in enumerate(lines) if line.endswith("$Германия — Телемост 4x"))
+        vk = lines[start:end]
+        self.assertFalse(any(line.startswith("##rooms:") for line in vk))
+        self.assertEqual(3, sum(line.startswith("##bond-room:") for line in vk))
+        self.assertIn("#" + "b" * 64, vk[0])
+
     def test_publish_installs_only_private_file_and_nginx_location(self):
         body = self.generate()
         self.write_config({"PUBLISH_SSH_TARGET": "root@192.0.2.20"})

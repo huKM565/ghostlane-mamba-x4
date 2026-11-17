@@ -72,11 +72,12 @@ def render_group(group, rooms, vless):
     for profile, prefix in PROFILES:
         selected = [rooms[f"{prefix}{index}"] for index in range(1, 5)]
         keys = {room["key"] for room in selected}
-        if len(keys) != 1:
-            raise ValueError(f"{group} {profile} rooms must share one key for ##rooms")
         output.append(olc_link(selected[0], f"{group} — {profile}"))
         output.append(f"##group: {group}")
-        output.append("##rooms: " + ", ".join(room["room"] for room in selected[1:]))
+        if len(keys) == 1:
+            output.append("##rooms: " + ", ".join(room["room"] for room in selected[1:]))
+        else:
+            output.extend(f"##bond-room: {olc_link(room)}" for room in selected[1:])
         output.append(f"##bond-vless: {bond_vless}")
     ordered = [rooms[label] for label in LABELS]
     output.append(olc_link(ordered[0], f"{group} — Multi 12x"))
