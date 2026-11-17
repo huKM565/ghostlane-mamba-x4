@@ -59,6 +59,8 @@ def olc_link(room, name=None):
 
 def vless_link(vless):
     host = vless["host"]
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     return f"vless://{vless['id']}@{host}:{vless['port']}?security=none&encryption=none#VLESS"

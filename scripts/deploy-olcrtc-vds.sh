@@ -74,7 +74,11 @@ load_config() {
   [[ "${PUBLISH_URL}" =~ ^https://[^/[:space:]]+/[^?#[:space:]]+$ ]] || die "PUBLISH_URL must be an HTTPS URL without query or fragment"
   [[ "${NGINX_SERVER_FILE}" = /* && "${NGINX_SERVER_FILE}" != *[[:space:]]* ]] || die "NGINX_SERVER_FILE must be an absolute path without whitespace"
   [[ "${VLESS_UUID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || die "VLESS_UUID is not a UUID"
-  [[ "${VLESS_LISTEN}" =~ ^(127\.0\.0\.1|\[::1\]):[0-9]+$ ]] || die "VLESS_LISTEN must use a loopback address"
+  if [ "${VLESS_PUBLIC_COMPAT:-false}" = true ]; then
+    [[ "${VLESS_LISTEN}" =~ ^(0\.0\.0\.0|127\.0\.0\.1|\[::1\]):[0-9]+$ ]] || die "VLESS_LISTEN must use loopback or explicit public compatibility"
+  else
+    [[ "${VLESS_LISTEN}" =~ ^(127\.0\.0\.1|\[::1\]):[0-9]+$ ]] || die "VLESS_LISTEN must use a loopback address"
+  fi
   [[ "${OLCRTC_SOURCE}" = /* ]] || die "OLCRTC_SOURCE must be an absolute path"
   [[ "${XRAY_BINARY}" = /* ]] || die "XRAY_BINARY must be an absolute path"
   port="${VLESS_LISTEN##*:}"
@@ -216,8 +220,9 @@ deploy_remote() {
   [ -x "${ARTIFACT_DIR}/olcrtc-linux-amd64" ] || die "run build first"
   [ -x "${ARTIFACT_DIR}/xray" ] || die "run build first"
   render_deployment
-  local stage file name olcrtc_hash xray_hash
+  local stage file name olcrtc_hash xray_hash unit state attempt
   stage="/tmp/ilyukhaline/deploy-$$"
+  unit="ilyukhaline-deploy-$$.service"
   olcrtc_hash="$(awk '{print $1}' "${ARTIFACT_DIR}/olcrtc-linux-amd64.sha256")"
   xray_hash="$(awk '{print $1}' "${ARTIFACT_DIR}/xray.sha256")"
   ssh_run "mkdir -p '${stage}' && chmod 700 '${stage}'" >/dev/null
@@ -225,7 +230,25 @@ deploy_remote() {
     name="${file##*/}"
     scp_upload "${file}" "${stage}/${name}"
   done
-  ssh_run bash -s "${stage}" "${olcrtc_hash}" "${xray_hash}" "${VLESS_LISTEN##*:}" < "${REPO_ROOT}/deploy/remote-deploy.sh"
+  scp_upload "${REPO_ROOT}/deploy/remote-deploy.sh" "${stage}/remote-deploy.sh"
+  ssh_run systemd-run --unit="${unit}" --property=Type=oneshot --property=RemainAfterExit=yes --no-block \
+    bash "${stage}/remote-deploy.sh" "${stage}" "${olcrtc_hash}" "${xray_hash}" "${VLESS_LISTEN##*:}" >/dev/null
+  for ((attempt = 1; attempt <= 90; attempt++)); do
+    state="$(ssh_run systemctl show "${unit}" --property=ActiveState,ExecMainStatus || true)"
+    if [[ "${state}" = *ActiveState=failed* ]]; then
+      ssh_run journalctl -u "${unit}" --no-pager || true
+      ssh_run systemctl stop "${unit}" >/dev/null || true
+      die "remote deployment failed"
+    fi
+    if [[ "${state}" = *ActiveState=active* && "${state}" = *ExecMainStatus=0* ]]; then
+      ssh_run journalctl -u "${unit}" --no-pager || true
+      ssh_run systemctl stop "${unit}" >/dev/null
+      return 0
+    fi
+    sleep 2
+  done
+  ssh_run systemctl stop "${unit}" >/dev/null || true
+  die "remote deployment timed out"
 }
 
 status_remote() {

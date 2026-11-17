@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import subprocess
 import tempfile
@@ -73,6 +74,11 @@ with log.open("a") as stream:
     stream.write(" ".join(sys.argv[1:]) + "\n")
 action = sys.argv[1] if len(sys.argv) > 1 else ""
 units = [value for value in sys.argv[2:] if value.endswith(".service")]
+if action == "show" and units:
+    status = root / f"{units[0]}.status"
+    if status.exists():
+        print(status.read_text(), end="")
+    sys.exit(0)
 active = root / "active-units"
 current = set(active.read_text().splitlines()) if active.exists() else set()
 if action in ("start", "restart", "enable"):
@@ -84,6 +90,37 @@ elif action == "is-active":
     print(state)
     sys.exit(0 if state == "active" else 3)
 active.write_text("\n".join(sorted(current)) + ("\n" if current else ""))
+'''
+
+FAKE_SYSTEMD_RUN = r'''#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
+root = Path(os.environ["FAKE_REMOTE_ROOT"])
+unit = next(value.split("=", 1)[1] for value in sys.argv if value.startswith("--unit="))
+command = sys.argv[sys.argv.index("--no-block") + 1:]
+if command[0] == "bash":
+    script = Path(command[1]).read_text()
+    for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/opt/ilyukhaline", "/usr/local/etc/xray", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
+        script = script.replace(prefix, str(root) + prefix)
+    command = ["bash", "-s", *command[2:]]
+log = root / f"{unit}.log"
+with log.open("w") as stream:
+    result = subprocess.run(command, input=script, text=True, stdout=stream, stderr=subprocess.STDOUT)
+status = "failed" if result.returncode else "active"
+(root / f"{unit}.status").write_text(f"ActiveState={status}\nExecMainStatus={result.returncode}\n")
+'''
+
+FAKE_JOURNALCTL = r'''#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+root = Path(os.environ["FAKE_REMOTE_ROOT"])
+unit = sys.argv[sys.argv.index("-u") + 1]
+log = root / f"{unit}.log"
+if log.exists():
+    print(log.read_text(), end="")
 '''
 
 FAKE_MAGE = r'''#!/usr/bin/env python3
@@ -144,6 +181,12 @@ class DeployPreflightTest(unittest.TestCase):
         certbot = root / "remote-bin/certbot"
         certbot.write_text("#!/usr/bin/env sh\nexit 0\n")
         certbot.chmod(0o755)
+        systemd_run = root / "remote-bin/systemd-run"
+        systemd_run.write_text(FAKE_SYSTEMD_RUN)
+        systemd_run.chmod(0o755)
+        journalctl = root / "remote-bin/journalctl"
+        journalctl.write_text(FAKE_JOURNALCTL)
+        journalctl.chmod(0o755)
 
     def enable_remote(self):
         self.remote = self.root / "remote"
@@ -254,6 +297,17 @@ class DeployPreflightTest(unittest.TestCase):
     def test_vless_must_listen_on_loopback(self):
         self.assert_invalid({"VLESS_LISTEN": "0.0.0.0:10000"}, expected="loopback")
         self.assert_invalid({"VLESS_LISTEN": "192.0.2.10:10000"}, expected="loopback")
+
+    def test_public_compatibility_is_explicit_and_subscription_stays_loopback(self):
+        self.write_config({"VLESS_LISTEN": "0.0.0.0:10000", "VLESS_PUBLIC_COMPAT": "true"})
+        result = self.run_script("--config", str(self.config), "check")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        spec = importlib.util.spec_from_file_location("subscription_generator", HERE.parent / "deploy/generate_subscription.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        link = module.vless_link({"host": "0.0.0.0", "port": 10000, "id": self.values()["VLESS_UUID"]})
+        self.assertIn("@127.0.0.1:10000", link)
+        self.assertNotIn("0.0.0.0:10000", link)
 
     def test_check_only_issues_read_only_remote_commands(self):
         result = self.run_script("--config", str(self.config), "check")
