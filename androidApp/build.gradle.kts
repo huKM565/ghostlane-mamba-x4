@@ -57,8 +57,8 @@ composeCompiler {
     // The debug build and the pull-request checks never asked for the tool, which
     // is why they stayed green over a release build that could not start.
     //
-    // The cure is a compiler that is a release rather than a build of one; this
-    // is what lets a release be built until the pin moves.
+    // The pin now uses the release compiler, so the build no longer depends on
+    // an expiring development repository for the plugin or this optional table.
     includeComposeMappingFile.set(false)
 }
 
