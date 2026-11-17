@@ -153,8 +153,8 @@ build_local() {
     cd "${OLCRTC_SOURCE}"
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 mage build
   )
-  [ -f "${OLCRTC_SOURCE}/dist/olcrtc" ] || die "local olcRTC build produced no binary"
-  cp "${OLCRTC_SOURCE}/dist/olcrtc" "${ARTIFACT_DIR}/olcrtc-linux-amd64"
+  [ -f "${OLCRTC_SOURCE}/build/olcrtc-linux-amd64" ] || die "local olcRTC build produced no binary"
+  cp "${OLCRTC_SOURCE}/build/olcrtc-linux-amd64" "${ARTIFACT_DIR}/olcrtc-linux-amd64"
   cp "${XRAY_BINARY}" "${ARTIFACT_DIR}/xray"
   chmod 755 "${ARTIFACT_DIR}/olcrtc-linux-amd64" "${ARTIFACT_DIR}/xray"
   (
@@ -222,7 +222,7 @@ deploy_remote() {
     name="${file##*/}"
     scp_upload "${file}" "${stage}/${name}"
   done
-  ssh_run bash -s "${stage}" "${olcrtc_hash}" "${xray_hash}" < "${REPO_ROOT}/deploy/remote-deploy.sh"
+  ssh_run bash -s "${stage}" "${olcrtc_hash}" "${xray_hash}" "${VLESS_LISTEN##*:}" < "${REPO_ROOT}/deploy/remote-deploy.sh"
 }
 
 status_remote() {

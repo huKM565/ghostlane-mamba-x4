@@ -24,7 +24,7 @@ if os.environ.get("FAKE_REMOTE_ROOT") and "== OS ==" not in sys.argv[-1]:
     stdin_mode = "-s" in sys.argv
     target_index = next(index for index, argument in enumerate(sys.argv) if argument.startswith("root@"))
     command = sys.stdin.read() if stdin_mode else " ".join(sys.argv[target_index + 1:])
-    for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
+    for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/usr/local/etc/xray", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
         command = command.replace(prefix, str(root) + prefix)
     env = os.environ.copy()
     env["FAKE_REMOTE_ROOT"] = str(root)
@@ -53,7 +53,7 @@ from pathlib import Path
 source = Path(sys.argv[-2])
 host, target = sys.argv[-1].split(":", 1)
 root_name = "FAKE_REMOTE_ROOT_2" if host == "root@192.0.2.20" and os.environ.get("FAKE_REMOTE_ROOT_2") else "FAKE_REMOTE_ROOT"
-for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
+for prefix in ("/etc/ilyukhaline", "/etc/olcrtc", "/etc/systemd/system", "/etc/nginx", "/usr/local/etc/xray", "/opt/ilyukhaline", "/var/lib/ilyukhaline", "/var/www", "/tmp/ilyukhaline"):
     if target.startswith(prefix):
         target = os.environ[root_name] + target
         break
@@ -93,7 +93,7 @@ from pathlib import Path
 with open(os.environ["FAKE_BUILD_LOG"], "a") as log:
     log.write(" ".join(sys.argv[1:]) + " GOOS=" + os.environ.get("GOOS", "") + " GOARCH=" + os.environ.get("GOARCH", "") + " CGO=" + os.environ.get("CGO_ENABLED", "") + "\n")
 if sys.argv[1:] == ["build"]:
-    output = Path("dist/olcrtc")
+    output = Path("build/olcrtc-linux-amd64")
     output.parent.mkdir(exist_ok=True)
     output.write_text("#!/usr/bin/env sh\necho fake-olcrtc\n")
     output.chmod(0o755)
@@ -354,6 +354,47 @@ class DeployLifecycleTest(DeployPreflightTest):
         systemctl = (self.remote / "systemctl.log").read_text()
         self.assertIn("disable olcrtc@m1.service olcrtc@v1.service", systemctl)
         self.assertIn("stop olcrtc@m1.service olcrtc@v1.service", systemctl)
+
+    def seed_real_german_layout(self):
+        old = self.remote / "etc/olcrtc"
+        old.mkdir(parents=True)
+        for index in range(1, 5):
+            (old / f"server-mamba-{index}.yaml").write_text(f"mode: srv\nroom:\n  id: adopted-m{index}\n")
+        (old / "server-vkcalls.yaml").write_text("mode: srv\nroom:\n  id: adopted-v1\n")
+        xray = self.remote / "usr/local/etc/xray/config.json"
+        xray.parent.mkdir(parents=True)
+        xray.write_text(
+            '{"inbounds":[{"listen":"0.0.0.0","port":10000,"protocol":"vless",'
+            '"settings":{"clients":[{"id":"11111111-1111-1111-1111-111111111111"}]}}]}'
+        )
+        (self.remote / "active-units").write_text(
+            "olcrtc@1.service\nolcrtc@2.service\nolcrtc@3.service\nolcrtc@4.service\n"
+            "olcrtc-vkcalls.service\nxray.service\n"
+        )
+
+    def test_real_german_layout_is_adopted_without_changing_rooms(self):
+        self.seed_real_german_layout()
+        self.build()
+        result = self.deploy()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        managed = self.remote / "etc/ilyukhaline"
+        for index in range(1, 5):
+            self.assertIn(f"adopted-m{index}", (managed / f"m{index}.yaml").read_text())
+        self.assertIn("adopted-v1", (managed / "v1.yaml").read_text())
+        active = (self.remote / "active-units").read_text()
+        self.assertIn("ilyukhaline-xray.service", active)
+        self.assertNotIn("olcrtc@1.service", active)
+        self.assertNotIn("olcrtc-vkcalls.service", active)
+        self.assertNotIn("xray.service\n", active.replace("ilyukhaline-xray.service\n", ""))
+
+    def test_failed_real_german_deploy_restores_old_units(self):
+        self.seed_real_german_layout()
+        self.build()
+        active = (self.remote / "active-units").read_text().splitlines()
+        result = self.deploy(env={"FAKE_XRAY_TEST_FAIL": "1"})
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(set(active), set((self.remote / "active-units").read_text().splitlines()))
+        self.assertFalse((self.remote / "etc/ilyukhaline").exists())
 
     def test_invalid_xray_restores_previous_files_and_units(self):
         self.build()
