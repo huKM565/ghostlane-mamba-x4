@@ -141,6 +141,9 @@ class DeployPreflightTest(unittest.TestCase):
         nginx = root / "remote-bin/nginx"
         nginx.write_text("#!/usr/bin/env sh\nexit \"${FAKE_NGINX_EXIT:-0}\"\n")
         nginx.chmod(0o755)
+        certbot = root / "remote-bin/certbot"
+        certbot.write_text("#!/usr/bin/env sh\nexit 0\n")
+        certbot.chmod(0o755)
 
     def enable_remote(self):
         self.remote = self.root / "remote"
@@ -509,6 +512,15 @@ class SubscriptionTest(DeployLifecycleTest):
         self.assertIn(f"include {self.remote2}/etc/nginx/snippets/ilyukhaline-subscription.conf;", nginx.read_text())
         self.assertNotIn(self.values()["VLESS_UUID"], result.stdout + result.stderr)
         self.assertNotIn(body, result.stdout + result.stderr)
+
+    def test_publish_creates_dedicated_vhost_when_missing(self):
+        self.generate()
+        self.write_config({"PUBLISH_SSH_TARGET": "root@192.0.2.20"})
+        result = self.run_script("--config", str(self.config), "publish", "--input", str(self.output))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        nginx = self.remote2 / "etc/nginx/sites-enabled/default"
+        self.assertIn("server_name example.invalid;", nginx.read_text())
+        self.assertIn("include", nginx.read_text())
 
     def test_publish_rejects_missing_input_and_unescaped_path(self):
         missing = self.run_script("--config", str(self.config), "publish", "--input", str(self.root / "missing"))

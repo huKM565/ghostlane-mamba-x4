@@ -14,6 +14,8 @@ rollback() {
   if [ "${ready}" = true ]; then
     if [ -f "${stage}/server.backup" ]; then
       cp -a "${stage}/server.backup" "${server_file}"
+    else
+      rm -f "${server_file}"
     fi
     if [ -f "${stage}/subscription.backup" ]; then
       cp -a "${stage}/subscription.backup" "${publish_path}"
@@ -49,6 +51,15 @@ mv -f "${publish_path}.new" "${publish_path}"
 install -m 644 "${stage}/subscription.conf" "${snippet}.new"
 mv -f "${snippet}.new" "${snippet}"
 
+if [ ! -f "${server_file}" ]; then
+  mkdir -p "$(dirname "${server_file}")"
+  printf 'server {\n  listen 80;\n  server_name %s;\n  root /var/www/ilyukhaline;\n}\n' "${host}" > "${server_file}"
+fi
+ready=true
+if [ ! -f "/etc/letsencrypt/live/${host}/fullchain.pem" ]; then
+  certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect -d "${host}"
+fi
+
 python3 - "${server_file}" "${host}" "${snippet}" <<'PY'
 import sys
 from pathlib import Path
@@ -83,7 +94,6 @@ if include not in text:
         raise SystemExit(f"no server block for {host}")
     path.write_text("".join(lines))
 PY
-ready=true
 nginx -t
 nginx -s reload
 trap - ERR
