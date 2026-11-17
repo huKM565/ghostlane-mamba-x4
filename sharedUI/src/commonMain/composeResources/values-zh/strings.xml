@@ -226,7 +226,7 @@
     <string name="notification_reconnecting">正在重新连接…</string>
     <string name="notification_split_error">分应用代理出错</string>
     <string name="notification_stop">停止</string>
-    <string name="notification_title_proxy">Ghostlane 代理</string>
+    <string name="notification_title_proxy">ИлюхаLine 代理</string>
     <string name="notification_tunnel_error">VPN 隧道错误</string>
     <string name="notification_tunnel_failed">隧道失败</string>
     <string name="notification_verifying">正在验证隧道…</string>

@@ -379,21 +379,12 @@ fun RoomBoard(
     selectedLocationId: String?,
     isConnected: Boolean,
     bondRoomStates: List<org.olcbox.app.vpn.BondRoomStatus>?,
-    pingsState: PingsState,
-    pingsStale: Boolean = false,
-    /** olcRTC occupancy by storage id; a missing entry renders no seats at all. */
-    olcrtcSlots: Map<String, OlcrtcSlots>,
-    /** How full each room has been, by storage id. Empty until a second poll lands. */
-    occupancyHistory: Map<String, List<Float>>,
     /** Storage ids whose room key the coordinator no longer recognises. */
     revokedKeys: Set<String>,
-    canPing: (LocationConfig) -> Boolean,
     collapsible: Boolean,
     showSettings: Boolean,
     showCustomLocation: Boolean,
-    showGetSubscription: Boolean,
     refreshingSubscriptionUrl: String?,
-    lowestSubscriptionUrls: Set<String>,
     /**
      * The server lists that are folded away, by address: the settings' to say,
      * which is what makes a folded list still folded the next time the app
@@ -402,19 +393,15 @@ fun RoomBoard(
      */
     foldedSubscriptionUrls: Set<String>,
     onLocationSelected: (String) -> Unit,
-    onLowestSelected: (subscriptionUrl: String, fallbackLocationId: String) -> Unit,
     onFoldToggle: (subscriptionUrl: String) -> Unit,
     /** Asks for the room with this storage id to be pinned to the top of its list, or unpinned. */
     onPinToggle: (locationId: String) -> Unit,
     onLocationSettingsClick: (String) -> Unit,
-    onMeasure: (List<String>) -> Unit,
     onRefreshSubscriptionClick: (String) -> Unit,
     onDeleteLocationClick: (String) -> Unit,
     onDeleteSubscriptionClick: (String) -> Unit,
-    onOpenUrl: (String) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
-    onGetSubscriptionClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (model.isEmpty) {
@@ -428,20 +415,8 @@ fun RoomBoard(
 
     val words = listWords()
 
-    // One measurement for the whole board, so the columns at the ends of the
-    // cards' lines are the same width on every card.
-    CompositionLocalProvider(LocalPkBoardColumns provides rememberBoardColumns()) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (pingsStale) {
-            Text(
-                stringResource(Res.string.pings_stale),
-                style = MaterialTheme.typography.labelSmall,
-                // Named, or it is the default: black, on a ground a shade off black.
-                color = LocalPkPalette.current.textDim
-            )
-        }
         model.subscriptionGroups.forEach { group ->
-            val ids = group.locations.map { it.storageId }
             // A group comes from groupBy over at least one location, or is a
             // list its host refused, which has none: its head is made from what
             // the host said instead.
@@ -456,14 +431,6 @@ fun RoomBoard(
             // for when the list is served again.
             val foldable = collapsible && refused == null
             val isCollapsed = foldable && !groupUrl.isNullOrBlank() && groupUrl in foldedSubscriptionUrls
-            val lowestEnabled = !groupUrl.isNullOrBlank() && groupUrl in lowestSubscriptionUrls
-            // Lowest is stored per subscription, but only the list containing
-            // the active location is the current selection. Highlighting every
-            // enabled preference looked like several live VPN connections.
-            val lowestSelected = lowestEnabled &&
-                group.locations.any { it.storageId == selectedLocationId }
-            val isPinging = pingsState is PingsState.Loading &&
-                pingsState.pendingLocationIds.any { it in ids }
 
             // Folded, a list keeps the rooms that are pinned in it. That is
             // what a pin is for — the room somebody uses stays in reach — and
@@ -475,21 +442,14 @@ fun RoomBoard(
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
                 val subscription = first?.metadata?.subscription ?: refused?.subscription
-                val fraction = planFraction(subscription?.used, subscription?.available)
-                val quota = quotaText(subscription?.used, subscription?.available, words)
 
                 PkGroupHeader(
                     title = (first?.subscriptionTitle(words) ?: refused?.subscriptionTitle(words))
                         .orEmpty()
                         .ifBlank { words.serverList },
-                    // Both the quota and the expiry move into the bar where there
-                    // is one, rather than being printed twice in two shapes. What
-                    // is left on this line is how stale the list is, which is
-                    // short enough to survive four buttons beside it.
                     meta = subscriptionMetaLine(
-                        quota = if (fraction == null) quota else null,
-                        expiresAtEpochMs = subscription?.expiresAtEpochMs
-                            ?.takeIf { fraction == null },
+                        quota = null,
+                        expiresAtEpochMs = subscription?.expiresAtEpochMs,
                         lastRefreshAtEpochMs = subscription?.lastRefreshAtEpochMs,
                         nowEpochMs = nowMillis(),
                         formatDate = ::formatDate,
@@ -497,64 +457,23 @@ fun RoomBoard(
                     ),
                     collapsed = isCollapsed,
                     collapsible = foldable,
-                    holdsSelection = headMarksSelection(group.locations, rows, selectedLocationId, lowestSelected),
+                    holdsSelection = headMarksSelection(group.locations, rows, selectedLocationId, false),
                     onToggle = { if (!groupUrl.isNullOrBlank()) onFoldToggle(groupUrl) }
                 ) {
-                    // Every control the group has, on the title's line: an i in a
-                    // circle for the provider's page, a paper plane for its
-                    // support, a bolt that measures and circling arrows that fetch
-                    // the list again.
-                    subscription?.webPageUrl?.takeIf { it.isNotBlank() }?.let { url ->
-                        PkIconButton(
-                            icon = PkIcons.Info,
-                            contentDescription = stringResource(Res.string.provider_site),
-                            onClick = { onOpenUrl(url) },
-                            size = 32,
-                            corner = 9,
-                            touch = 40
-                        )
-                    }
-                    subscription?.supportUrl?.takeIf { it.isNotBlank() }?.let { url ->
-                        PkIconButton(
-                            icon = PkIcons.Send,
-                            contentDescription = stringResource(Res.string.provider_support),
-                            onClick = { onOpenUrl(url) },
-                            size = 32,
-                            corner = 9,
-                            touch = 40
-                        )
-                    }
-                    if (group.locations.any { it.config?.let(canPing) == true }) {
-                        LatencyButton(isRunning = isPinging, onClick = { onMeasure(ids) })
-                    }
                     if (!groupUrl.isNullOrBlank()) {
                         SubscriptionRefreshButton(
                             isRefreshing = groupUrl == refreshingSubscriptionUrl,
                             onClick = { onRefreshSubscriptionClick(groupUrl) }
                         )
-                        // Beside the arrows that fetch the list, the one that
-                        // drops it. Removing a list used to live in application
-                        // settings, two screens from the list it removes.
                         PkIconButton(
                             icon = PkIcons.Delete,
                             contentDescription = stringResource(Res.string.remove_server_list),
                             onClick = { onDeleteSubscriptionClick(groupUrl) },
-                            // The size of the four beside it. It was the header's
-                            // forty points, by the default, and stood a head taller
-                            // than the row it closes.
                             size = 32,
                             corner = 9,
                             touch = 40
                         )
                     }
-                }
-
-                if (fraction != null && !isCollapsed) {
-                    PkPlanBar(
-                        label = planLabel(subscription?.expiresAtEpochMs, nowMillis(), words),
-                        value = quota.orEmpty(),
-                        fraction = fraction
-                    )
                 }
 
                 if (refused != null) {
@@ -575,51 +494,13 @@ fun RoomBoard(
 
                 if (rows.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        if (!isCollapsed && !groupUrl.isNullOrBlank()) {
-                            val measurable = group.locations.filter { it.config?.let(canPing) == true }
-                            val measuredPings = group.locations.mapNotNull { pingsState.pingFor(it.storageId) }
-                            val selectedServer = group.locations
-                                .firstOrNull { it.storageId == selectedLocationId }
-                                ?.let { locationDisplayParts(it).second }
-                            if (measurable.isNotEmpty()) PkRoomCard(
-                                title = stringResource(Res.string.lowest_latency),
-                                tag = stringResource(Res.string.lowest_tag_caps),
-                                emoji = "⚡",
-                                selected = lowestSelected,
-                                connectedHere = lowestSelected && isConnected,
-                                blocked = false,
-                                seats = SeatDisplay.None,
-                                freeText = null,
-                                freeIsFull = false,
-                                freeIsTight = false,
-                                history = emptyList(),
-                                pingMs = measuredPings.minOrNull(),
-                                isMeasuring = isPinging,
-                                isOffline = measurable.isNotEmpty() && measurable.all {
-                                    pingsState.isOffline(it.storageId)
-                                },
-                                keyGone = false,
-                                wire = if (lowestSelected && isConnected && !selectedServer.isNullOrBlank()) {
-                                    stringResource(Res.string.lowest_connected_via_caps, selectedServer)
-                                } else {
-                                    stringResource(Res.string.lowest_fastest_caps)
-                                },
-                                // A list with rows to measure has a first one.
-                                onClick = { onLowestSelected(groupUrl, group.locations.first().storageId) },
-                                onMeasure = if (measurable.isNotEmpty()) ({ onMeasure(ids) }) else null
-                            )
-                        }
                         rows.forEach { location ->
                             BoardRoomCard(
                                 location = location,
-                                selected = !lowestSelected && location.storageId == selectedLocationId,
+                                selected = location.storageId == selectedLocationId,
                                 isConnected = isConnected,
                                 bondRoomStates = bondRoomStates,
-                                pingsState = pingsState,
-                                slots = olcrtcSlots[location.storageId],
-                                history = occupancyHistory[location.storageId].orEmpty(),
                                 keyGone = location.storageId in revokedKeys,
-                                canPing = canPing,
                                 pinned = location.storageId in model.pinnedIds,
                                 onPinToggle = { onPinToggle(location.storageId) },
                                 onClick = { onLocationSelected(location.storageId) },
@@ -627,8 +508,7 @@ fun RoomBoard(
                                     { onLocationSettingsClick(location.storageId) }
                                 } else {
                                     null
-                                },
-                                onMeasure = { onMeasure(listOf(location.storageId)) }
+                                }
                             )
                         }
                     }
@@ -641,33 +521,17 @@ fun RoomBoard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                val customIds = model.customLocations.map { it.storageId }
-                val isCustomPinging = pingsState is PingsState.Loading &&
-                    pingsState.pendingLocationIds.any { it in customIds }
-                Row(
+                PkSectionEyebrow(
+                    text = stringResource(Res.string.custom_locations),
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    PkSectionEyebrow(text = stringResource(Res.string.custom_locations), modifier = Modifier.weight(1f))
-                    if (model.customLocations.any { it.config?.let(canPing) == true }) {
-                        LatencyButton(
-                            isRunning = isCustomPinging,
-                            onClick = { onMeasure(customIds) },
-                            modifier = Modifier.offset(x = PK_GROUP_BUTTON_OVERHANG)
-                        )
-                    }
-                }
+                )
                 model.customLocations.forEach { location ->
                     BoardRoomCard(
                         location = location,
                         selected = location.storageId == selectedLocationId,
                         isConnected = isConnected,
                         bondRoomStates = bondRoomStates,
-                        pingsState = pingsState,
-                        slots = olcrtcSlots[location.storageId],
-                        history = occupancyHistory[location.storageId].orEmpty(),
                         keyGone = location.storageId in revokedKeys,
-                        canPing = canPing,
                         pinned = location.storageId in model.pinnedIds,
                         onPinToggle = { onPinToggle(location.storageId) },
                         onClick = { onLocationSelected(location.storageId) },
@@ -677,7 +541,6 @@ fun RoomBoard(
                         // by the person looking at it, and anyone who can add one
                         // must be able to delete it.
                         onLongClick = { onLocationSettingsClick(location.storageId) },
-                        onMeasure = { onMeasure(listOf(location.storageId)) },
                         // Shown, not hidden behind a long press: this row exists
                         // because the user typed it in, and until now the only way
                         // to take it back out was a gesture nothing announces and
@@ -701,7 +564,6 @@ fun RoomBoard(
             icon = Icons.Outlined.Add,
             onClick = onAddSubscriptionClick
         )
-    }
     }
 }
 
@@ -731,22 +593,15 @@ private fun BoardRoomCard(
     selected: Boolean,
     isConnected: Boolean,
     bondRoomStates: List<org.olcbox.app.vpn.BondRoomStatus>?,
-    pingsState: PingsState,
-    slots: OlcrtcSlots?,
-    history: List<Float>,
     keyGone: Boolean,
-    canPing: (LocationConfig) -> Boolean,
     pinned: Boolean,
     onPinToggle: () -> Unit,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
-    onMeasure: () -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
     val (emoji, name) = locationDisplayParts(location)
-    // The one thing the app is certain of: it is connected, and to this location.
     val connectedHere = selected && isConnected
-    val seats = seatDisplay(slots, mine = connectedHere)
     val config = location.config
     PkRoomCard(
         title = name,
@@ -755,15 +610,6 @@ private fun BoardRoomCard(
         selected = selected,
         connectedHere = connectedHere,
         bondRoomStates = bondRoomStates.takeIf { selected },
-        blocked = roomIsBlocked(slots, mine = connectedHere),
-        seats = seats,
-        freeText = seatFreeText(slots, boardWords()),
-        freeIsFull = slots != null && slots.slots_free <= 0,
-        freeIsTight = slots != null && slots.slots_free in 1..2,
-        history = history,
-        pingMs = pingsState.pingFor(location.storageId),
-        isMeasuring = pingsState.isChecking(location.storageId),
-        isOffline = pingsState.isOffline(location.storageId),
         keyGone = keyGone,
         notice = TransportMismatch.caption(config, location.metadata, stringResource(Res.string.mismatch_caption_caps)),
         wire = wireShape(config, boardWords()),
@@ -771,10 +617,6 @@ private fun BoardRoomCard(
         onPinToggle = onPinToggle,
         onClick = onClick,
         onLongClick = onLongClick,
-        // No MEASURE where the platform says nothing can be measured — a button
-        // whose only outcome is a snackbar explaining that it cannot work is
-        // worse than no button.
-        onMeasure = if (config?.let(canPing) == true) onMeasure else null,
         trailing = onDelete?.let { remove ->
             {
                 // Flat, not a PkIconButton: the boxed variant belongs on the group
@@ -812,8 +654,6 @@ internal fun planLabel(expiresAtEpochMs: Long?, nowEpochMs: Long, words: ListWor
  * There is no row here that points at a purchase. It was removed rather than
  * hidden: App Review read the app as a front end for a paid plan, and a control
  * that only a flag stands between us and shipping is not an answer to that.
- * `RoomBoard`'s `showGetSubscription` stays as the guard against one being added
- * back, which is why it is still a parameter nothing reads.
  */
 @Composable
 private fun RelaySetupCard(

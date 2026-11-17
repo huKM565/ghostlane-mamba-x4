@@ -226,7 +226,7 @@
     <string name="notification_reconnecting">Переподключение…</string>
     <string name="notification_split_error">Ошибка раздельного туннелирования</string>
     <string name="notification_stop">Остановить</string>
-    <string name="notification_title_proxy">Ghostlane · прокси</string>
+    <string name="notification_title_proxy">ИлюхаLine · прокси</string>
     <string name="notification_tunnel_error">Ошибка VPN-туннеля</string>
     <string name="notification_tunnel_failed">Сбой туннеля</string>
     <string name="notification_verifying">Проверка туннеля…</string>

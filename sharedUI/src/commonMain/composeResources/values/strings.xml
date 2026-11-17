@@ -226,7 +226,7 @@
     <string name="notification_reconnecting">Reconnecting...</string>
     <string name="notification_split_error">Split tunneling error</string>
     <string name="notification_stop">Stop</string>
-    <string name="notification_title_proxy">Ghostlane Proxy</string>
+    <string name="notification_title_proxy">ИлюхаLine Proxy</string>
     <string name="notification_tunnel_error">VPN tunnel error</string>
     <string name="notification_tunnel_failed">Tunnel failed</string>
     <string name="notification_verifying">Verifying tunnel...</string>

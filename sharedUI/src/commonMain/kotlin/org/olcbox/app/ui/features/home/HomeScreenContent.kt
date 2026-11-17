@@ -223,7 +223,7 @@ fun HomeScreenContent(
                                 .verticalScroll(rememberScrollState())
                                 .padding(top = 6.dp)
                         ) {
-                            RoomDetailPane(board = board, callbacks = callbacks)
+                            RoomDetailPane(board = board)
                         }
                         PkActionBar(
                             action = chrome.action,
@@ -435,17 +435,7 @@ private fun HomeBoardHead(
         } else {
             Modifier
         },
-        chips = if (board.model.showChips) {
-            {
-                BoardFilterChips(
-                    model = board.model,
-                    activeFilterKey = board.transportFilter,
-                    onFilterSelected = callbacks.onFilterSelected
-                )
-            }
-        } else {
-            null
-        }
+        chips = null
     )
     PkHairline()
 }
@@ -457,31 +447,20 @@ private fun HomeRoomBoard(board: HomeBoard, callbacks: HomeCallbacks) {
         selectedLocationId = board.selectedLocationId,
         isConnected = board.isConnected,
         bondRoomStates = board.bondRoomStates,
-        pingsState = board.pingsState,
-        pingsStale = board.pingsStale,
-        olcrtcSlots = board.olcrtcSlots,
-        occupancyHistory = board.occupancyHistory,
         revokedKeys = board.revokedKeys,
-        canPing = callbacks.canPing,
         collapsible = board.collapsible,
         showSettings = board.showSettings,
         showCustomLocation = board.showCustomLocation,
-        showGetSubscription = board.showGetSubscription,
         refreshingSubscriptionUrl = board.refreshingSubscriptionUrl,
-        lowestSubscriptionUrls = board.lowestSubscriptionUrls,
         foldedSubscriptionUrls = board.foldedSubscriptionUrls,
         onLocationSelected = callbacks.onLocationSelected,
-        onLowestSelected = callbacks.onLowestSelected,
         onFoldToggle = callbacks.onFoldToggle,
         onPinToggle = callbacks.onPinToggle,
         onLocationSettingsClick = callbacks.onLocationSettingsClick,
-        onMeasure = callbacks.onMeasure,
         onRefreshSubscriptionClick = callbacks.onRefreshSubscriptionClick,
         onDeleteLocationClick = callbacks.onDeleteLocationClick,
         onDeleteSubscriptionClick = callbacks.onDeleteSubscriptionClick,
-        onOpenUrl = callbacks.onOpenUrl,
         onAddSubscriptionClick = callbacks.onAddClick,
-        onAddLocationClick = callbacks.onAddLocationClick,
-        onGetSubscriptionClick = callbacks.onGetSubscriptionClick
+        onAddLocationClick = callbacks.onAddLocationClick
     )
 }

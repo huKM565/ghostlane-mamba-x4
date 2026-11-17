@@ -120,24 +120,4 @@ class BoardFitsTest {
             assertEquals(name.left, tag.left, 1f, "the tag does not start where the name does")
         }
     }
-
-    @Test fun theSeatsAndTheWordsBesideThemStayInsideTheirCard() {
-        // Sixteen seats are the widest row there is; the words beside them were the
-        // count that lost its last digits ("0 /") in a box sized in points.
-        for (phone in listOf(Phone("zoomed", 320, 693, 2f, "ru"), Phone("iphone", 393, 852, 1.3f, "ru"))) {
-            measuredOn(phone, { BoardFixture.Home(BoardFixture.Scene(connected = true)) }) {
-                val screen = phone.widthDp * RENDER_DENSITY
-                val words = laidTexts().filter { it.text.startsWith("свободно") || it.text == "мест нет" }
-                assertTrue(words.isNotEmpty(), "no card says how many seats are free")
-                words.forEach {
-                    assertTrue(!it.cut, "\"${it.text}\" is cut on ${phone.label}")
-                    // Position and size: a card further down the list has no
-                    // clipped bounds to speak of until it is scrolled to.
-                    val left = it.node.positionInRoot.x
-                    val right = left + it.node.size.width
-                    assertTrue(left >= 0f && right <= screen, "\"${it.text}\" runs off ${phone.label}: $left..$right")
-                }
-            }
-        }
-    }
 }

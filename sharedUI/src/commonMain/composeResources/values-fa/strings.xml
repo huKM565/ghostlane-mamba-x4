@@ -226,7 +226,7 @@
     <string name="notification_reconnecting">در حال اتصال دوباره…</string>
     <string name="notification_split_error">خطای تونل‌زنی تفکیکی</string>
     <string name="notification_stop">توقف</string>
-    <string name="notification_title_proxy">Ghostlane · پراکسی</string>
+    <string name="notification_title_proxy">ИлюхаLine · پراکسی</string>
     <string name="notification_tunnel_error">خطای تونل VPN</string>
     <string name="notification_tunnel_failed">تونل از کار افتاد</string>
     <string name="notification_verifying">در حال بررسی تونل…</string>

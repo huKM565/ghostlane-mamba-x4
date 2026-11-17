@@ -2802,7 +2802,7 @@ class OlcboxVpnService : VpnService() {
 
     private fun buildNotification(status: String) =
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(localized("Ghostlane ${activeModeLabel()}"))
+            .setContentTitle(localized("ИлюхаLine ${activeModeLabel()}"))
             .setContentText(localized(status))
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
@@ -3154,6 +3154,6 @@ private val NOTIFICATION_TEXTS: Map<String, StringResource> = mapOf(
     "Split tunneling error" to Res.string.notification_split_error,
     "Add a location first" to Res.string.blocked_no_location,
     "Pick a server" to Res.string.blocked_no_server_picked,
-    "Ghostlane Proxy" to Res.string.notification_title_proxy,
+    "ИлюхаLine Proxy" to Res.string.notification_title_proxy,
     "Stop" to Res.string.notification_stop
 )

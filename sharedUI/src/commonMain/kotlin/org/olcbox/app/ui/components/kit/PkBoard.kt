@@ -104,10 +104,7 @@ import kotlin.math.max
 /**
  * The board: a list of rooms, grouped by the list they came from.
  *
- * The card is the whole point of the redesign. A row with a name, a latency and
- * a radio dot is what every client draws; this one says how many seats the room
- * has, which of them are taken, where yours is, how that has been moving, and —
- * once selected — what the connection will look like from outside.
+ * A card keeps selection, connection details and per-room bond health together.
  */
 
 // ── ping ───────────────────────────────────────────────────────────────────
@@ -243,15 +240,6 @@ fun PkRoomCard(
     emoji: String?,
     selected: Boolean,
     connectedHere: Boolean,
-    blocked: Boolean,
-    seats: SeatDisplay,
-    freeText: String?,
-    freeIsFull: Boolean,
-    freeIsTight: Boolean,
-    history: List<Float>,
-    pingMs: Int?,
-    isMeasuring: Boolean,
-    isOffline: Boolean,
     /**
      * The coordinator does not recognise this room's key any more, so nothing here
      * will connect until the list is fetched again.
@@ -260,7 +248,6 @@ fun PkRoomCard(
     wire: String,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    onMeasure: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     /** Whether this room is pinned to the top of its list. */
     pinned: Boolean = false,
@@ -273,12 +260,7 @@ fun PkRoomCard(
      * room they like.
      */
     onPinToggle: (() -> Unit)? = null,
-    /**
-     * One more line said where the seats would be, when there is something the
-     * user should know before pressing connect — a link that asked for a
-     * transport this provider cannot carry, say. Same voice as the revoked-key
-     * line, for the same reason.
-     */
+    /** A transport mismatch or another reason to check the profile before connecting. */
     notice: String? = null,
     /**
      * Drawn at the end of the name row. A card whose location the user added
@@ -306,28 +288,13 @@ fun PkRoomCard(
             .clip(RoundedCornerShape(14.dp))
             .background(background)
             .border(1.dp, border, RoundedCornerShape(14.dp))
-            // A full room is dimmed rather than hidden: it is still information,
-            // and it comes back the moment somebody leaves.
-            .alpha(if (blocked && !selected) 0.5f else 1f)
             .combinedClickable(
-                onClick = { if (!blocked) onClick() },
+                onClick = onClick,
                 onLongClick = onLongClick
             )
-            // Twelve above and below a name set on a twenty-point line: the card a
-            // one-line name makes is the height it was when the line was twenty-four
-            // and the padding ten, and a name on two lines is no longer two lines
-            // with a third's worth of air between them.
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
-        val columns = LocalPkBoardColumns.current
-        val ping = pingReading(
-            pingMs = pingMs,
-            isMeasuring = isMeasuring,
-            failed = isOffline,
-            connectedHere = connectedHere,
-            words = boardWords()
-        )
         PkNameLine(
             modifier = Modifier.fillMaxWidth(),
             // On one line the tag stands against the latency, where it always
@@ -407,27 +374,7 @@ fun PkRoomCard(
                     }
                     if (trailing != null) {
                         trailing()
-                        Spacer(Modifier.width(4.dp))
                     }
-                    Text(
-                        text = ping.label,
-                        style = pkMono(10, 0.4),
-                        color = when (ping.state) {
-                            PkPingState.Measured -> pkPingColor(pingMs ?: 0)
-                            // Amber, not red: a probe that got nothing is a fact about
-                            // the attempt, and red here read as a verdict on the server.
-                            PkPingState.NoAnswer -> palette.accent2
-                            PkPingState.Measuring, PkPingState.Unmeasured -> palette.textMuted
-                        },
-                        textAlign = TextAlign.End,
-                        maxLines = 1,
-                        softWrap = false,
-                        // As wide as the widest thing this column says, in the
-                        // user's language and at the user's text size, so the tags
-                        // before it line up down the list. It was fifty-four points
-                        // whatever the text: "нет пинга" did not fit at any size.
-                        modifier = Modifier.widthIn(min = columns.ping)
-                    )
                 }
             }
         )
@@ -493,21 +440,6 @@ fun PkRoomCard(
             )
         }
 
-        if (seats != SeatDisplay.None) {
-            PkSeatsLine(
-                seats = seats,
-                history = history,
-                mine = connectedHere,
-                free = freeText.orEmpty(),
-                freeColor = when {
-                    freeIsFull -> palette.danger
-                    freeIsTight -> palette.accent2
-                    else -> palette.accent
-                },
-                freeColumn = columns.free
-            )
-        }
-
         if (selected) {
             Box(
                 Modifier
@@ -517,8 +449,6 @@ fun PkRoomCard(
             )
             PkNameLine(
                 modifier = Modifier.fillMaxWidth(),
-                // The sentence wraps beside the button while two lines there hold
-                // it; when they do not, the button goes under it.
                 nameLines = 2,
                 gap = 10.dp,
                 name = {
@@ -530,27 +460,6 @@ fun PkRoomCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 },
-                end = if (onMeasure != null) {
-                    {
-                        Text(
-                            text = if (isMeasuring) "···" else stringResource(Res.string.room_measure_caps),
-                            style = pkMono(10, 1.2),
-                            color = palette.link,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .clickable(
-                                    onClickLabel = stringResource(Res.string.measure_latency),
-                                    role = Role.Button
-                                ) { onMeasure() }
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
-                } else {
-                    null
-                }
             )
         }
     }

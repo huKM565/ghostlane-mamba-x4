@@ -241,26 +241,15 @@ class StoreArtRenderTest {
             bypassProvider = LocationConfig.PROVIDER_JITSI,
             transport = LocationConfig.TRANSPORT_DATACHANNEL
         ).normalized()
-        val level = slots.used.toFloat() / slots.slots_total
         PkRoomCard(
             title = name,
             tag = transportTag(config),
             emoji = null,
             selected = mine,
             connectedHere = mine,
-            blocked = false,
-            seats = seatDisplay(slots, mine = mine),
-            freeText = seatFreeText(slots, words),
-            freeIsFull = false,
-            freeIsTight = slots.slots_free in 1..2,
-            history = List(8) { step -> (level * (0.6f + 0.05f * step)).coerceIn(0f, 1f) },
-            pingMs = ping,
-            isMeasuring = false,
-            isOffline = false,
             keyGone = false,
             wire = wireShape(config, words),
             onClick = {},
-            onMeasure = {},
             pinned = pinned,
             onPinToggle = {}
         )

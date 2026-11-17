@@ -134,11 +134,7 @@ fun HomeScreen(
     val subscriptionSettings by viewModel.subscriptionSettings.collectAsState()
     val routingSettings by viewModel.routingSettings.collectAsState()
     val subscriptionSettingsLoaded by viewModel.subscriptionSettingsLoaded.collectAsState()
-    // 24 exits x 3 transports is 72 rows out of one server list; without a filter
-    // the list is unusable. Chips only appear for transports actually present.
-    //
-    // The settings' to keep, not this screen's: on a phone the screen is built
-    // again on every return to the app, and what it remembered went with it.
+    // Kept for stored-settings compatibility; the home board always shows every profile.
     val transportFilter = subscriptionSettings.transportFilter
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -453,7 +449,7 @@ fun HomeScreen(
     }
     val model = rememberBoardModel(
         locations = locations,
-        activeFilterKey = transportFilter,
+        activeFilterKey = null,
         sort = subscriptionSettings.sort,
         lowestSubscriptionUrls = lowestSubscriptionUrls,
         pinned = subscriptionSettings.pinnedLocations,

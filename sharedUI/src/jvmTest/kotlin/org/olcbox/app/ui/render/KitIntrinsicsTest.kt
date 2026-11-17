@@ -19,8 +19,6 @@ import org.olcbox.app.ui.components.kit.PkRoomCard
 import org.olcbox.app.ui.components.kit.PkStatusStrip
 import org.olcbox.app.ui.components.kit.PkAction
 import org.olcbox.app.ui.components.kit.PkActionKind
-import org.olcbox.app.ui.components.kit.SeatDisplay
-import org.olcbox.app.ui.components.kit.SeatState
 import org.olcbox.app.ui.icons.PkIcons
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -67,19 +65,9 @@ class KitIntrinsicsTest {
             emoji = null,
             selected = true,
             connectedHere = true,
-            blocked = false,
-            seats = SeatDisplay.Pips(List(8) { if (it < 3) SeatState.Taken else SeatState.Free }),
-            freeText = "5 free",
-            freeIsFull = false,
-            freeIsTight = false,
-            history = listOf(0.2f, 0.4f, 0.3f),
-            pingMs = 143,
-            isMeasuring = false,
-            isOffline = false,
             keyGone = true,
             wire = "a WB Stream media session",
             onClick = {},
-            onMeasure = {},
             notice = "LINK ASKS FOR VP8 · JITSI RUNS DATACHANNEL"
         )
         PkActionBar(action = PkAction("LEAVE DE · OLCRTC · WB", PkActionKind.Stop), onClick = {})

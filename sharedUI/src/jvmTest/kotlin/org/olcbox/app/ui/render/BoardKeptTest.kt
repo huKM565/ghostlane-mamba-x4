@@ -39,47 +39,13 @@ class BoardKeptTest {
 
     private fun DesktopComposeUiTest.names(): Set<String> = laidTexts().map { it.text }.toSet()
 
-    @Test fun aTransportChosenIsStillChosenWhenTheScreenIsBuiltAgain() {
+    @Test fun everyTransportStaysVisibleWhenTheScreenIsBuiltAgain() {
         app.onTheScreen(phone, app.models(Memory(AppFixture.stored()))) { buildAgain ->
             assertTrue(REALITY_ROW in names() && XHTTP_ROW in names(), "the board as it opens: ${names()}")
 
-            onNodeWithText("REALITY").performClick()
-            waitForIdle()
-            assertTrue(REALITY_ROW in names(), "the transport chosen has no rows: ${names()}")
-            assertFalse(XHTTP_ROW in names(), "a row of another transport stayed on the board")
-
             buildAgain()
 
-            assertTrue(REALITY_ROW in names(), "the transport chosen has no rows after the screen was built again")
-            assertFalse(XHTTP_ROW in names(), "the choice of transport was gone when the screen was built again")
-        }
-    }
-
-    @Test fun aTransportChosenIsStillChosenTheNextTimeTheAppOpens() {
-        val source = Memory(AppFixture.stored())
-        app.onTheScreen(phone, app.models(source)) {
-            onNodeWithText("REALITY").performClick()
-            waitForIdle()
-        }
-
-        // A process later: other models, over what the first ones left stored.
-        app.onTheScreen(phone, app.models(source)) {
-            assertTrue(REALITY_ROW in names(), "the transport chosen has no rows: ${names()}")
-            assertFalse(XHTTP_ROW in names(), "the choice of transport did not outlive the process")
-        }
-    }
-
-    @Test fun choosingAllAgainIsKeptToo() {
-        val source = Memory(AppFixture.stored())
-        app.onTheScreen(phone, app.models(source)) {
-            onNodeWithText("REALITY").performClick()
-            waitForIdle()
-            onNodeWithText("ALL").performClick()
-            waitForIdle()
-        }
-
-        app.onTheScreen(phone, app.models(source)) {
-            assertTrue(REALITY_ROW in names() && XHTTP_ROW in names(), "the board did not go back to every transport")
+            assertTrue(REALITY_ROW in names() && XHTTP_ROW in names(), "a transport disappeared: ${names()}")
         }
     }
 
