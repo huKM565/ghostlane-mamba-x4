@@ -9,6 +9,8 @@ OUTPUT=""
 INPUT=""
 TOOL=""
 ROOMS_FILE=""
+LABEL=""
+SECONDS=""
 declare -a CONFIGS=()
 declare -a SECRETS=()
 declare -a ROOM_PROVIDERS=()
@@ -20,6 +22,7 @@ declare -a ROOM_KEYS=()
 usage() {
   printf 'usage: %s --config FILE [--config FILE] check|build|deploy|status|subscription --output FILE|publish --input FILE\n' "${0##*/}" >&2
   printf '       %s provision-salutejazz --tool FILE --rooms-file FILE\n' "${0##*/}" >&2
+  printf '       %s --config FILE room-outage --label j1 --seconds 60\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -94,9 +97,19 @@ load_config() {
   ROOM_KEYS=()
   SECRETS=("${VLESS_UUID}" "${PUBLISH_URL}")
   [[ "${TELEMOST_ENABLED:-true}" =~ ^(true|false)$ ]] || die "TELEMOST_ENABLED must be true or false"
+  [[ "${SALUTEJAZZ_ENABLED:-false}" =~ ^(true|false)$ ]] || die "SALUTEJAZZ_ENABLED must be true or false"
   local -a providers=(MAMBA VKCALLS)
   if [ "${TELEMOST_ENABLED:-true}" = true ]; then
     providers+=(TELEMOST)
+  fi
+  if [ "${SALUTEJAZZ_ENABLED:-false}" = true ]; then
+    require_value SALUTEJAZZ_ROOMS_FILE
+    local rooms_file="${SALUTEJAZZ_ROOMS_FILE}"
+    [[ "${rooms_file}" = /* && -f "${rooms_file}" ]] || die "SALUTEJAZZ_ROOMS_FILE must be an absolute existing file"
+    [ "$(stat -c '%a' "${rooms_file}")" = 600 ] || die "SALUTEJAZZ_ROOMS_FILE must have mode 600"
+    # shellcheck source=/dev/null
+    . "${rooms_file}"
+    providers+=(SALUTEJAZZ)
   fi
   for provider in "${providers[@]}"; do
     for index in 1 2 3 4; do
@@ -106,7 +119,11 @@ load_config() {
       name="${provider}_KEY_${index}"
       require_value "${name}"
       key="${!name}"
-      [[ "${url}" = https://* && "${url}" != *"'"* && "${url}" != *"#"* ]] || die "${provider}_URL_${index} must be an HTTPS URL without quotes or a fragment"
+      if [ "${provider}" = SALUTEJAZZ ]; then
+        [[ "${url}" =~ ^[a-z0-9]{4,16}:[a-z0-9]{4,16}$ ]] || die "SALUTEJAZZ_URL_${index} must be a code:password room reference"
+      else
+        [[ "${url}" = https://* && "${url}" != *"'"* && "${url}" != *"#"* ]] || die "${provider}_URL_${index} must be an HTTPS URL without quotes or a fragment"
+      fi
       [[ "${key}" =~ ^[0-9a-fA-F]{64}$ ]] || die "${provider}_KEY_${index} must be 64 hexadecimal characters"
       if [ "${provider}" = TELEMOST ]; then
         [[ "${url}" =~ ^https://telemost\.yandex\.ru/j/[A-Za-z0-9_-]+$ ]] ||
@@ -121,10 +138,14 @@ load_config() {
         fi
       done
       ROOM_PROVIDERS+=("${provider,,}")
-      ROOM_LABELS+=("${provider:0:1}${index}")
+      if [ "${provider}" = SALUTEJAZZ ]; then
+        ROOM_LABELS+=("J${index}")
+      else
+        ROOM_LABELS+=("${provider:0:1}${index}")
+      fi
       ROOM_URLS+=("${url}")
       ROOM_KEYS+=("${key}")
-      if [ "${provider}" = MAMBA ]; then
+      if [ "${provider}" = MAMBA ] || [ "${provider}" = SALUTEJAZZ ]; then
         ROOM_TRANSPORTS+=("datachannel")
       else
         ROOM_TRANSPORTS+=("vp8channel")
@@ -202,6 +223,7 @@ render_room() {
     mamba) engine_provider=jitsi ;;
     vkcalls) engine_provider=vkcalls ;;
     telemost) engine_provider=telemost ;;
+    salutejazz) engine_provider=salutejazz ;;
     *) die "unknown provider ${ROOM_PROVIDERS[$index]}" ;;
   esac
   file="${ARTIFACT_DIR}/staging/${ROOM_LABELS[$index],,}.yaml"
@@ -368,6 +390,18 @@ publish_remote() {
   ssh_run bash -s "${stage}" "${PUBLISH_PATH}" "${NGINX_SERVER_FILE}" "${host}" < "${REPO_ROOT}/deploy/remote-publish.sh"
 }
 
+room_outage() {
+  [[ "${LABEL}" =~ ^j[1-4]$ ]] || die "room-outage label must be j1, j2, j3 or j4"
+  [[ "${SECONDS}" =~ ^[0-9]+$ ]] || die "room-outage seconds must be a number"
+  ((SECONDS >= 1 && SECONDS <= 300)) || die "room-outage seconds must be between 1 and 300"
+  OUTAGE_UNIT="ilyukhaline-olcrtc@${LABEL}.service"
+  ssh_run systemctl stop "${OUTAGE_UNIT}" >/dev/null
+  trap 'ssh_run systemctl restart "${OUTAGE_UNIT}" >/dev/null' EXIT
+  sleep "${SECONDS}"
+  ssh_run systemctl restart "${OUTAGE_UNIT}" >/dev/null
+  trap - EXIT
+}
+
 while (($#)); do
   case "$1" in
     --config)
@@ -395,7 +429,17 @@ while (($#)); do
       ROOMS_FILE="$2"
       shift 2
       ;;
-    check|build|deploy|subscription|publish|status|provision-salutejazz)
+    --label)
+      (($# >= 2)) || usage
+      LABEL="$2"
+      shift 2
+      ;;
+    --seconds)
+      (($# >= 2)) || usage
+      SECONDS="$2"
+      shift 2
+      ;;
+    check|build|deploy|subscription|publish|status|provision-salutejazz|room-outage)
       [ -z "${COMMAND}" ] || usage
       COMMAND="$1"
       shift
@@ -425,4 +469,5 @@ case "${COMMAND}" in
   status) status_remote ;;
   subscription) subscription_remote ;;
   publish) publish_remote ;;
+  room-outage) room_outage ;;
 esac

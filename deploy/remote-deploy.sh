@@ -18,7 +18,7 @@ declare -a stale_units=()
 declare -a stale_active=()
 declare -a units=(ilyukhaline-xray.service)
 for label in "${room_labels[@]}"; do
-  [[ "${label}" =~ ^[mvt][1-4]$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
+  [[ "${label}" =~ ^[mvtj][1-4]$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
   units+=("ilyukhaline-olcrtc@${label}.service")
 done
 for label in t1 t2 t3 t4; do
@@ -137,6 +137,11 @@ for unit in "${stale_units[@]}"; do
 done
 ready=true
 
+for label in "${room_labels[@]}"; do
+  if [ -f "/etc/ilyukhaline/${label}.yaml" ]; then
+    cp -a "/etc/ilyukhaline/${label}.yaml" "${stage}/${label}.yaml"
+  fi
+done
 for index in 1 2 3 4; do
   label="m${index}"
   if [ -f "/etc/ilyukhaline/${label}.yaml" ]; then
@@ -223,14 +228,23 @@ systemctl daemon-reload
 for unit in "${units[@]}"; do
   systemctl enable "${unit}" >/dev/null
   keep_active=false
-  if ((${#stale_active[@]})); then
-    for previous in "${previous_active[@]}"; do
-      if [ "${unit}" = "${previous}" ]; then
+  for previous in "${previous_active[@]}"; do
+    if [ "${unit}" != "${previous}" ]; then
+      continue
+    fi
+    if [ "${unit}" = ilyukhaline-xray.service ]; then
+      if [ -f "${backup}/etc/xray.json" ] && cmp -s "${backup}/etc/xray.json" "${stage}/xray.json"; then
         keep_active=true
-        break
       fi
-    done
-  fi
+    else
+      label="${unit#ilyukhaline-olcrtc@}"
+      label="${label%.service}"
+      if [ -f "${backup}/etc/${label}.yaml" ] && cmp -s "${backup}/etc/${label}.yaml" "${stage}/${label}.yaml"; then
+        keep_active=true
+      fi
+    fi
+    break
+  done
   if [ "${keep_active}" = true ]; then
     continue
   fi

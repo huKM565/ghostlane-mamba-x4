@@ -422,6 +422,7 @@ jobs:
         run: |
           python3 scripts/test_gate_scripts.py
           python3 scripts/test_deploy_olcrtc_vds.py
+          python3 scripts/test_provision_salutejazz.py
 
       # The runner's own shellcheck: Ubuntu 24.04's 0.9.0, older than a pip or
       # brew install and stricter in places (SC2015 on `a && b || c`), so check

@@ -251,6 +251,27 @@ class DeployPreflightTest(unittest.TestCase):
             values.pop(key, None)
         self.config.write_text("".join(f"{key}='{value}'\n" for key, value in values.items()))
 
+    def salutejazz_rooms_text(self, duplicate=False, partial=False, mismatched_key=False):
+        key = "04" * 32
+        lines = []
+        for index in range(1, 3 if partial else 5):
+            room = "room1:pass1word" if duplicate and index == 2 else f"room{index}:pass{index}word"
+            room_key = "05" * 32 if mismatched_key and index == 2 else key
+            lines.append(f"SALUTEJAZZ_URL_{index}='{room}'")
+            lines.append(f"SALUTEJAZZ_KEY_{index}='{room_key}'")
+        return "\n".join(lines) + "\n"
+
+    def enable_salutejazz(self, content=None):
+        rooms = self.root / "salutejazz-rooms.conf"
+        rooms.write_text(content if content is not None else self.salutejazz_rooms_text())
+        rooms.chmod(0o600)
+        self.write_config({
+            "TELEMOST_ENABLED": "false",
+            "SALUTEJAZZ_ENABLED": "true",
+            "SALUTEJAZZ_ROOMS_FILE": str(rooms),
+        })
+        return rooms
+
     def run_script(self, *args, env=None):
         actual_env = self.env.copy()
         if env:
@@ -558,6 +579,82 @@ class DeployLifecycleTest(DeployPreflightTest):
         self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)
         self.assertNotIn("ilyukhaline-olcrtc@t4.service", active)
         self.assertEqual(9, len(active.splitlines()))
+
+    def test_salutejazz_deploys_four_datachannel_rooms_idempotently(self):
+        rooms = self.enable_salutejazz()
+        self.build()
+        result = self.deploy()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        managed = self.remote / "etc/ilyukhaline"
+        for index in range(1, 5):
+            text = (managed / f"j{index}.yaml").read_text()
+            self.assertIn("provider: salutejazz", text)
+            self.assertIn("transport: datachannel", text)
+            self.assertIn(f"id: 'room{index}:pass{index}word'", text)
+            self.assertIn("egress:\n  allow: '127.0.0.1:10000'", text)
+            self.assertIn(f"ilyukhaline-olcrtc@j{index}.service", (self.remote / "active-units").read_text())
+        for secret in (self.salutejazz_rooms_text(), "04" * 32):
+            self.assertNotIn(secret, result.stdout + result.stderr)
+        status = self.run_script("--config", str(self.config), "status")
+        self.assertIn("J1 salutejazz active", status.stdout)
+        self.assertIn("J4 salutejazz active", status.stdout)
+        self.assertNotIn(rooms.read_text(), status.stdout + status.stderr)
+        snapshot = self.managed_snapshot()
+        self.assertEqual(0, self.deploy().returncode)
+        self.assertEqual(snapshot, self.managed_snapshot())
+
+    def test_salutejazz_rejects_incomplete_duplicate_and_mismatched_groups(self):
+        for content in (
+            self.salutejazz_rooms_text(partial=True),
+            self.salutejazz_rooms_text(duplicate=True),
+            self.salutejazz_rooms_text(mismatched_key=True),
+            self.salutejazz_rooms_text().replace("room1:pass1word", "ROOM1:pass1word"),
+        ):
+            with self.subTest(content=content):
+                self.enable_salutejazz(content)
+                result = self.run_script("--config", str(self.config), "check")
+                self.assertNotEqual(0, result.returncode)
+                self.assertNotIn("pass1word", result.stdout + result.stderr)
+
+    def test_additive_salutejazz_keeps_existing_cores_running(self):
+        self.write_config({"TELEMOST_ENABLED": "false"})
+        self.build()
+        self.assertEqual(0, self.deploy().returncode)
+        managed = self.remote / "etc/ilyukhaline"
+        before = {name: (managed / name).read_bytes() for name in ("m1.yaml", "v1.yaml", "xray.json")}
+        systemctl_log = self.remote / "systemctl.log"
+        systemctl_log.write_text("")
+        self.enable_salutejazz()
+
+        self.assertEqual(0, self.deploy().returncode)
+
+        self.assertEqual(before, {name: (managed / name).read_bytes() for name in before})
+        log = systemctl_log.read_text()
+        for unit in ("ilyukhaline-olcrtc@m1.service", "ilyukhaline-olcrtc@v1.service", "ilyukhaline-xray.service"):
+            self.assertNotIn(f"restart {unit}", log)
+        self.assertIn("restart ilyukhaline-olcrtc@j1.service", log)
+        self.assertIn("restart ilyukhaline-olcrtc@j4.service", log)
+
+    def test_room_outage_restarts_only_the_selected_room_after_interruption(self):
+        self.enable_salutejazz()
+        self.build()
+        self.assertEqual(0, self.deploy().returncode)
+        systemctl_log = self.remote / "systemctl.log"
+        systemctl_log.write_text("")
+        sleeper = self.bin / "sleep"
+        sleeper.write_text("#!/usr/bin/env sh\nexit 1\n")
+        sleeper.chmod(0o755)
+
+        result = self.run_script("--config", str(self.config), "room-outage", "--label", "j2", "--seconds", "1")
+
+        self.assertNotEqual(0, result.returncode)
+        log = systemctl_log.read_text()
+        self.assertIn("stop ilyukhaline-olcrtc@j2.service", log)
+        self.assertIn("restart ilyukhaline-olcrtc@j2.service", log)
+        self.assertNotIn("restart ilyukhaline-olcrtc@j1.service", log)
+        self.assertNotIn("restart ilyukhaline-olcrtc@m1.service", log)
+        invalid = self.run_script("--config", str(self.config), "room-outage", "--label", "m1", "--seconds", "1")
+        self.assertNotEqual(0, invalid.returncode)
 
 
 class SubscriptionTest(DeployLifecycleTest):
