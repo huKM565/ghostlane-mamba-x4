@@ -41,6 +41,7 @@ import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.SubscriptionSettings
+import org.olcbox.app.data.model.RoutingMode
 import org.olcbox.app.data.model.RoutingSettings
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.RefusedList
@@ -256,7 +257,7 @@ class LocationsRepositoryImpl(
             dataSource.saveLocationBundle(adopted)
             return adopted
         }
-        return stored ?: legacy
+        return stored ?: legacy.copy(routing = RoutingSettings(mode = RoutingMode.BypassRussia))
     }
 
     override suspend fun saveBundle(bundle: LocationBundleV4) {

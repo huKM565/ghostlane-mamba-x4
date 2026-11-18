@@ -13,9 +13,34 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class RoutingSettingsTest {
-    @Test fun defaultIsEverythingThroughTheTunnel() = runTest {
+    @Test fun defaultIsRussiaDirectOnACompletelyFreshInstall() = runTest {
         val settings = LocationsRepositoryImpl(MemoryLocationsDataSource()).getRoutingSettings()
+        assertEquals(RoutingMode.BypassRussia, settings.mode)
+    }
+
+    @Test fun anExistingEmptyBundleKeepsItsGlobalChoice() = runTest {
+        val source = MemoryLocationsDataSource(stored = LocationBundleV4())
+        val settings = LocationsRepositoryImpl(source).getRoutingSettings()
         assertEquals(RoutingMode.Global, settings.mode)
+    }
+
+    @Test fun aLegacyLocationMigrationKeepsGlobal() = runTest {
+        val source = MemoryLocationsDataSource(
+            legacy = listOf(
+                "legacy_b" to """{"name":"B","server":"room-b","password":"key-b","turn":{"type":"wbstream"}}"""
+            )
+        )
+        val bundle = LocationsRepositoryImpl(source).getBundle()
+        assertEquals(RoutingMode.Global, bundle.routing.mode)
+        assertTrue(bundle.locations.isNotEmpty())
+    }
+
+    @Test fun anExplicitGlobalChoiceSurvivesRepositoryRecreation() = runTest {
+        val source = MemoryLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source)
+        repository.saveRoutingSettings(RoutingSettings(RoutingMode.Global))
+
+        assertEquals(RoutingMode.Global, LocationsRepositoryImpl(source).getRoutingSettings().mode)
     }
 
     @Test fun savedModeComesBack() = runTest {
