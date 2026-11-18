@@ -590,9 +590,10 @@ class SubscriptionTest(DeployLifecycleTest):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def generate(self):
+        self.write_config({"TELEMOST_ENABLED": "false"})
         self.build()
         self.assertEqual(0, self.deploy().returncode)
-        self.prepare_second_vds()
+        self.prepare_second_vds(telemost=False)
         (self.remote / "etc/ilyukhaline/unmanaged.yaml").write_text("room: unmanaged\n")
         self.output = self.root / "subscription.txt"
         result = self.run_script(
@@ -607,28 +608,30 @@ class SubscriptionTest(DeployLifecycleTest):
     def test_subscription_has_exact_groups_profiles_paths_and_snapshot(self):
         body = self.generate()
         primary = [line for line in body.splitlines() if line.startswith("olcrtc://")]
-        self.assertEqual(8, len(primary))
+        self.assertEqual(4, len(primary))
         expected_names = [
             f"{group} — {profile}"
             for group in ("Германия", "Финляндия")
-            for profile in ("Mamba 4x", "VK 4x", "Телемост 4x", "Multi 12x")
+            for profile in ("Mamba 4x", "VK 4x")
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
-        self.assertEqual(8, body.count("##group: "))
-        self.assertEqual(6, body.count("##rooms: "))
-        self.assertEqual(22, body.count("##bond-room: "))
+        self.assertEqual(4, body.count("##group: "))
+        self.assertEqual(4, body.count("##rooms: "))
+        self.assertEqual(0, body.count("##bond-room: "))
+        self.assertNotIn("Multi", body)
         self.assertEqual(0o600, self.output.stat().st_mode & 0o777)
         self.assertNotIn("unmanaged", body)
         for values in (self.values(), self.values()):
             for key, value in values.items():
-                if "_URL_" in key:
-                    self.assertGreaterEqual(body.count(value), 2)
-        for value in ("room-1-fi", "fake-room-1-fi", "permanent-room-1-fi"):
-            self.assertGreaterEqual(body.count(value), 2)
+                if "_URL_" in key and not key.startswith("TELEMOST"):
+                    self.assertEqual(2, body.count(value))
+        for key in ("MAMBA_URL_1", "VKCALLS_URL_1"):
+            value = self.values()[key] + "-fi"
+            self.assertEqual(1, body.count(f"@{value}#"))
         expected = HERE.parent / "deploy/testdata/subscription.expected.txt"
         self.assertEqual(expected.read_text(), body)
 
-    def test_finland_without_telemost_deploys_eight_rooms_and_three_profiles(self):
+    def test_mixed_telemost_availability_still_omits_multi_profiles(self):
         self.build()
         self.assertEqual(0, self.deploy().returncode)
         self.prepare_second_vds(telemost=False)
@@ -644,13 +647,12 @@ class SubscriptionTest(DeployLifecycleTest):
             "Германия — Mamba 4x",
             "Германия — VK 4x",
             "Германия — Телемост 4x",
-            "Германия — Multi 12x",
             "Финляндия — Mamba 4x",
             "Финляндия — VK 4x",
-            "Финляндия — Multi 8x",
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
-        self.assertIn("generated 7 profiles", result.stdout)
+        self.assertIn("generated 5 profiles", result.stdout)
+        self.assertNotIn("Multi", self.output.read_text())
         self.assertFalse((self.remote2 / "etc/ilyukhaline/t1.yaml").exists())
         active = (self.remote2 / "active-units").read_text()
         self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)

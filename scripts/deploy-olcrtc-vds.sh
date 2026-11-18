@@ -329,9 +329,9 @@ subscription_remote() {
     fetch_bundle "${bundle}"
     generator_args+=("--vds" "${group}=${bundle}")
     if [ "${TELEMOST_ENABLED:-true}" = true ]; then
-      profile_count=$((profile_count + 4))
-    else
       profile_count=$((profile_count + 3))
+    else
+      profile_count=$((profile_count + 2))
     fi
     index=$((index + 1))
   done
