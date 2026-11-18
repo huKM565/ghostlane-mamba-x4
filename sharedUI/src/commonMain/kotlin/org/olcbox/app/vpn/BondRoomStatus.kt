@@ -24,6 +24,7 @@ fun bondRoomLabel(index: Int, provider: String): String {
         LocationConfig.PROVIDER_JITSI -> "M$suffix"
         LocationConfig.PROVIDER_VKCALLS -> "V$suffix"
         LocationConfig.PROVIDER_TELEMOST -> "T$suffix"
+        LocationConfig.PROVIDER_SALUTEJAZZ -> "J$suffix"
         else -> "R${index + 1}"
     }
 }

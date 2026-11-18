@@ -16,10 +16,10 @@ class BondRoomStatusTest {
 
     @Test
     fun labelsFollowProviderAndPathOrder() {
-        val providers = List(4) { "jitsi" } + List(4) { "vkcalls" } + List(4) { "telemost" }
+        val providers = List(4) { "jitsi" } + List(4) { "vkcalls" } + List(4) { "telemost" } + List(4) { "salutejazz" }
 
         assertEquals(
-            listOf("M1", "M2", "M3", "M4", "V1", "V2", "V3", "V4", "T1", "T2", "T3", "T4"),
+            listOf("M1", "M2", "M3", "M4", "V1", "V2", "V3", "V4", "T1", "T2", "T3", "T4", "J1", "J2", "J3", "J4"),
             providers.mapIndexed(::bondRoomLabel),
         )
     }

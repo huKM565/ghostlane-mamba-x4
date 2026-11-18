@@ -133,6 +133,22 @@ class LocationConfigBondTest {
     }
 
     @Test
+    fun saluteJazzBondUsesOnlyDatachannel() {
+        val paths = (1..4).map { index ->
+            BondRoomConfig("room$index:pass${index}word", "d".repeat(64), "salutejazz", "datachannel")
+        }
+        val config = bondedConfig().copy(bondedRoomConfigs = paths)
+
+        assertTrue(config.isComplete())
+        assertEquals(List(4) { "salutejazz" }, config.bondedPaths().map { it.provider })
+        assertEquals(List(4) { "datachannel" }, config.bondedPaths().map { it.transport })
+        assertFalse(
+            config.copy(bondedRoomConfigs = paths.map { it.copy(transport = "vp8channel") })
+                .normalized().isComplete()
+        )
+    }
+
+    @Test
     fun bondRequiresPlainTcpVless() {
         assertFalse(bondedConfig(link = VLESS_LINK.replace("security=none", "security=tls")).isComplete())
         assertFalse(bondedConfig(link = VLESS_LINK.replace("encryption=none", "type=ws&security=none")).isComplete())

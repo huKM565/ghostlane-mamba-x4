@@ -2506,6 +2506,39 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun malformedSaluteJazzRefreshPreservesThePreviousSixProfiles() = runTest {
+        val key = "d".repeat(64)
+        val vless = "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000?security=none&encryption=none#VLESS"
+        fun body(broken: Boolean) = buildString {
+            for (group in listOf("Германия", "Финляндия")) {
+                append("olcrtc://jitsi?datachannel@$group-m1#$key$$group — Mamba 4x\n")
+                append("##rooms: $group-m2, $group-m3, $group-m4\n##bond-vless: $vless\n")
+                append("olcrtc://vkcalls?vp8channel@$group-v1#$key$$group — VK 4x\n")
+                append("##rooms: $group-v2, $group-v3, $group-v4\n##bond-vless: $vless\n")
+                append("olcrtc://salutejazz?datachannel@room1:pass1word#$key$$group — SaluteJazz 4x\n")
+                append("##group: $group\n")
+                val rooms = if (broken && group == "Финляндия") {
+                    "room2:pass2word, room3:pass3word"
+                } else {
+                    "room2:pass2word, room3:pass3word, room4:pass4word"
+                }
+                append("##rooms: $rooms\n##bond-vless: $vless\n")
+            }
+        }
+        var current = body(false)
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(current) }))
+        assertTrue(repo.importText("https://example.test/sub"))
+        val before = repo.getAllLocations().map { it.storageId to it.location.bondedPaths() }
+        assertEquals(6, before.size)
+
+        current = body(true)
+        repo.refreshSubscriptions()
+
+        assertEquals(before, repo.getAllLocations().map { it.storageId to it.location.bondedPaths() })
+    }
+
+    @Test
     fun refreshReplacesTheFailoverRoomsWithWhatTheServerAdvertisesNow() = runTest {
         val key = "c".repeat(64)
         var body = "olcrtc://telemost?vp8channel@R1#$key${'$'}Room\n##rooms: R2"
