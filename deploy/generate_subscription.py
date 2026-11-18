@@ -7,8 +7,8 @@ from pathlib import Path
 
 LABELS = tuple(f"{provider}{index}" for provider in "mvt" for index in range(1, 5))
 PROFILES = (
-    ("Mamba 4x", "m"),
-    ("VK 4x", "v"),
+    ("Mamba 4x (пойдет для мобильного интернета)", "m"),
+    ("VK 4x (обход белых списков)", "v"),
     ("Телемост 4x", "t"),
 )
 

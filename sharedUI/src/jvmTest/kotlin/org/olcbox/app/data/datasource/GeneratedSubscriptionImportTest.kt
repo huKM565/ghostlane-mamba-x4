@@ -17,7 +17,15 @@ class GeneratedSubscriptionImportTest {
         val locations = source.stored!!.locations.map { it.location }
         assertEquals(4, locations.size)
         assertEquals(List(4) { 4 }, locations.map { it.bondedPaths().size })
-        assertEquals(listOf("Mamba 4x", "VK 4x", "Mamba 4x", "VK 4x"), locations.map { it.name.substringAfter(" — ") })
+        assertEquals(
+            listOf(
+                "Mamba 4x (пойдет для мобильного интернета)",
+                "VK 4x (обход белых списков)",
+                "Mamba 4x (пойдет для мобильного интернета)",
+                "VK 4x (обход белых списков)",
+            ),
+            locations.map { it.name.substringAfter(" — ") },
+        )
         assertEquals(
             List(2) { "Германия" } + List(2) { "Финляндия" },
             source.stored!!.locations.map { it.metadata?.subscription?.name },

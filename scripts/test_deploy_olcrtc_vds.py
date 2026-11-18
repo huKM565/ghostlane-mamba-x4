@@ -612,7 +612,7 @@ class SubscriptionTest(DeployLifecycleTest):
         expected_names = [
             f"{group} — {profile}"
             for group in ("Германия", "Финляндия")
-            for profile in ("Mamba 4x", "VK 4x")
+            for profile in ("Mamba 4x (пойдет для мобильного интернета)", "VK 4x (обход белых списков)")
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
         self.assertEqual(4, body.count("##group: "))
@@ -644,11 +644,11 @@ class SubscriptionTest(DeployLifecycleTest):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         primary = [line for line in self.output.read_text().splitlines() if line.startswith("olcrtc://")]
         expected_names = [
-            "Германия — Mamba 4x",
-            "Германия — VK 4x",
+            "Германия — Mamba 4x (пойдет для мобильного интернета)",
+            "Германия — VK 4x (обход белых списков)",
             "Германия — Телемост 4x",
-            "Финляндия — Mamba 4x",
-            "Финляндия — VK 4x",
+            "Финляндия — Mamba 4x (пойдет для мобильного интернета)",
+            "Финляндия — VK 4x (обход белых списков)",
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
         self.assertIn("generated 5 profiles", result.stdout)
@@ -687,7 +687,7 @@ class SubscriptionTest(DeployLifecycleTest):
         vless = {"host": "127.0.0.1", "port": 10000, "id": "11111111-1111-1111-1111-111111111111"}
 
         lines = module.render_group("Германия", rooms, vless)
-        start = next(index for index, line in enumerate(lines) if line.endswith("$Германия — VK 4x"))
+        start = next(index for index, line in enumerate(lines) if line.endswith("$Германия — VK 4x (обход белых списков)"))
         end = next(index for index, line in enumerate(lines) if line.endswith("$Германия — Телемост 4x"))
         vk = lines[start:end]
         self.assertFalse(any(line.startswith("##rooms:") for line in vk))
