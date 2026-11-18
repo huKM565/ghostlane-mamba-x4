@@ -21,6 +21,7 @@
 - All server changes use `scripts/deploy-olcrtc-vds.sh`; no compiling on VDS.
 - Do not restart unchanged active Mamba/VK/Xray during the additive SaluteJazz deploy; never alter unmanaged 3x-ui, Hysteria, Amnezia or WD TT.
 - Preserve existing 4/8/12-path import compatibility and current rebalance/recovery behavior.
+- A completely fresh install defaults to `RoutingMode.BypassRussia` («Россия напрямую»); stored bundles, legacy migrations and an explicit saved `Global` choice remain unchanged.
 - Before changing `/home/hukm/olcrtc-release`, read its `AGENTS.md` and `docs/-.md`; new Go code gets required `// ai-generated` tags, Mage gates and race tests.
 - Live failure stops before full VDS rollout; do not claim unrun TCP/UDP/device checks as successful.
 - Routine smoke uses Connected state and server Xray access logs, not repeated ipify requests.
@@ -238,7 +239,42 @@ git add sharedUI/src/commonMain/kotlin/org/olcbox/app/vpn/BondRoomStatus.kt shar
 git commit -m "feat: show salutejazz room indicators"
 ```
 
-### Task 6: Throwaway single-room live gate
+### Task 6: Fresh-install Russia-direct routing
+
+**Files:**
+- Modify: `sharedUI/src/commonMain/kotlin/org/olcbox/app/data/datasource/LocationsDatasource.kt:240-260`
+- Test: `sharedUI/src/commonTest/kotlin/org/olcbox/app/data/datasource/RoutingSettingsTest.kt`
+
+**Interfaces:**
+- Consumes: existing `LocationBundleV4` storage and `RoutingMode.BypassRussia`.
+- Produces: `LocationsRepositoryImpl(MemoryLocationsDataSource()).getRoutingSettings().mode == RoutingMode.BypassRussia` only for a completely fresh install; serialized model defaults and stored choices remain unchanged.
+
+- [ ] **Step 1: Write failing fresh-install and preservation tests**
+
+Change the fresh-repository default assertion to `BypassRussia`. Add separate cases proving an existing empty bundle with `Global`, a legacy-location migration, and an explicit user-saved `Global` all remain `Global`; keep the pre-routing serialized bundle assertion `Global`.
+
+- [ ] **Step 2: Verify RED**
+
+Run: `./gradlew :sharedUI:jvmTest --tests org.olcbox.app.data.datasource.RoutingSettingsTest`
+Expected: only the completely fresh-install case fails with actual `Global`.
+
+- [ ] **Step 3: Implement repository-only initialization**
+
+In `getBundleUnlocked`, when both stored state and legacy locations are absent, return the fresh bundle with `routing = RoutingSettings(mode = RoutingMode.BypassRussia)`. Do not change `RoutingSettings.mode`'s serialized default, stored non-null bundles or the legacy adoption branch.
+
+- [ ] **Step 4: Verify routing and repository suites**
+
+Run: `./gradlew :sharedUI:jvmTest --tests org.olcbox.app.data.datasource.RoutingSettingsTest --tests org.olcbox.app.data.datasource.LocationsRepositoryImplTest`
+Expected: PASS; subsequent repository instances read the saved choice rather than reapplying the fresh default.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add sharedUI/src/commonMain/kotlin/org/olcbox/app/data/datasource/LocationsDatasource.kt sharedUI/src/commonTest/kotlin/org/olcbox/app/data/datasource/RoutingSettingsTest.kt
+git commit -m "feat: default new installs to russia direct"
+```
+
+### Task 7: Throwaway single-room live gate
 
 **Files:**
 - Outputs only under the plan's ignored workspace and `/tmp`; no committed binaries, reports or live room refs.
@@ -265,14 +301,14 @@ Read the sanitized summaries, confirm no secrets, and delete temporary live conf
 
 Record exact commands, selected cells and results. No product commit is needed for this throwaway verification task.
 
-### Task 7: Real VDS rollout and six-profile publication
+### Task 8: Real VDS rollout and six-profile publication
 
 **Files:**
 - Modify only protected local `/home/hukm/.config/ilyukhaline/` files, never their committed counterparts.
 - Outputs: local sanitized status/log summaries in the plan workspace.
 
 **Interfaces:**
-- Consumes: Tasks 1–6 and explicit `SALUTEJAZZ_ENABLED=true` in both protected VDS configs.
+- Consumes: Tasks 1–5 and 7 plus explicit `SALUTEJAZZ_ENABLED=true` in both protected VDS configs.
 - Produces: four active `j*` services per VDS and six profiles at the existing secret `sub.hukm.dev` URL.
 
 - [ ] **Step 1: Provision protected rooms idempotently**
@@ -295,22 +331,22 @@ Run `subscription --output` on the protected combined file, assert exact six nam
 
 Run `status` on both VDS. Expected: 12 managed olcRTC services plus healthy Xray per VDS; no secret values in the ledger/logs.
 
-### Task 8: Device verification and release delivery
+### Task 9: Device verification and release delivery
 
 **Files:**
 - No new product files; outputs are local APK/MSI/EXE/ZIP and sanitized verification summaries.
 
 **Interfaces:**
-- Consumes: Task 5 app build and Task 7 published subscription/VDS services.
-- Produces: verified Android behavior and current Windows artifacts in `~/Загрузки`.
+- Consumes: Tasks 5–6 app changes and Task 8 published subscription/VDS services.
+- Produces: verified fresh-install routing and Android behavior plus current Windows artifacts in `~/Загрузки`.
 
 - [ ] **Step 1: Run the complete local release gate**
 
 Run full JVM tests, Github Debug/Release APKs, desktop compile, bash syntax, ShellCheck, all Python deploy/gate tests, pinned sing-box check/start checks and pinned Xray validation. Expected: every command exits 0.
 
-- [ ] **Step 2: Install the fresh APK and import HTTPS**
+- [ ] **Step 2: Install the fresh APK and verify first launch/import**
 
-Install with ADB, clear only test-app data if necessary for a clean import, and import the existing secret subscription. Assert two groups/six profiles and no stale Multi/MTS/Telemost entries.
+Install with ADB and clear only test-app data for a clean first launch. Before importing, assert «Россия напрямую» is selected; select Global, restart and assert that choice survives. Restore Russia-direct if desired for smoke, then import the existing secret subscription and assert two groups/six profiles with no stale Multi/MTS/Telemost entries.
 
 - [ ] **Step 3: Smoke SaluteJazz 4x on both VDS**
 
