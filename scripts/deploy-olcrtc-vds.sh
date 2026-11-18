@@ -353,10 +353,12 @@ subscription_remote() {
     bundle="${work}/vds-${index}.bundle"
     fetch_bundle "${bundle}"
     generator_args+=("--vds" "${group}=${bundle}")
+    profile_count=$((profile_count + 2))
     if [ "${TELEMOST_ENABLED:-true}" = true ]; then
-      profile_count=$((profile_count + 3))
-    else
-      profile_count=$((profile_count + 2))
+      profile_count=$((profile_count + 1))
+    fi
+    if [ "${SALUTEJAZZ_ENABLED:-false}" = true ]; then
+      profile_count=$((profile_count + 1))
     fi
     index=$((index + 1))
   done

@@ -5,11 +5,12 @@ import os
 import re
 from pathlib import Path
 
-LABELS = tuple(f"{provider}{index}" for provider in "mvt" for index in range(1, 5))
+LABELS = tuple(f"{provider}{index}" for provider in "mvtj" for index in range(1, 5))
 PROFILES = (
     ("Mamba 4x (пойдет для мобильного интернета)", "m"),
     ("VK 4x (обход белых списков)", "v"),
     ("Телемост 4x", "t"),
+    ("SaluteJazz 4x", "j"),
 )
 
 
@@ -25,7 +26,7 @@ def field(text, name):
 
 def load_bundle(path):
     text = Path(path).read_text()
-    parts = re.split(r"(?m)^###(XRAY|ROOM [mvt][1-4])\n", text)
+    parts = re.split(r"(?m)^###(XRAY|ROOM [mvtj][1-4])\n", text)
     sections = {}
     for index in range(1, len(parts), 2):
         sections[parts[index]] = parts[index + 1]
@@ -54,9 +55,10 @@ def load_bundle(path):
         if any(char in room["room"] for char in "\r\n#"):
             raise ValueError(f"room {label} contains an unsafe character")
         rooms[label] = room
-    telemost_count = sum(label.startswith("t") for label in rooms)
-    if telemost_count not in (0, 4):
-        raise ValueError("managed bundle has an incomplete Telemost group")
+    for prefix, name in (("t", "Telemost"), ("j", "SaluteJazz")):
+        count = sum(label.startswith(prefix) for label in rooms)
+        if count not in (0, 4):
+            raise ValueError(f"managed bundle has an incomplete {name} group")
     return rooms, vless
 
 

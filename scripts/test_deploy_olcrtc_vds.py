@@ -658,7 +658,7 @@ class DeployLifecycleTest(DeployPreflightTest):
 
 
 class SubscriptionTest(DeployLifecycleTest):
-    def prepare_second_vds(self, telemost=True):
+    def prepare_second_vds(self, telemost=True, salutejazz=False):
         changes = {
             "SSH_TARGET": "root@192.0.2.20",
             "ARTIFACT_DIR": str(self.root / "artifacts-fi"),
@@ -668,6 +668,12 @@ class SubscriptionTest(DeployLifecycleTest):
             "VLESS_LISTEN": "127.0.0.1:10001",
             "TELEMOST_ENABLED": "true" if telemost else "false",
         }
+        if salutejazz:
+            rooms = self.root / "finland-salutejazz-rooms.conf"
+            rooms.write_text(self.salutejazz_rooms_text().replace("room", "firoom"))
+            rooms.chmod(0o600)
+            changes["SALUTEJAZZ_ENABLED"] = "true"
+            changes["SALUTEJAZZ_ROOMS_FILE"] = str(rooms)
         for provider in ("MAMBA", "VKCALLS", "TELEMOST"):
             for index in range(1, 5):
                 key = f"{provider}_URL_{index}"
@@ -687,10 +693,10 @@ class SubscriptionTest(DeployLifecycleTest):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def generate(self):
-        self.write_config({"TELEMOST_ENABLED": "false"})
+        self.enable_salutejazz()
         self.build()
         self.assertEqual(0, self.deploy().returncode)
-        self.prepare_second_vds(telemost=False)
+        self.prepare_second_vds(telemost=False, salutejazz=True)
         (self.remote / "etc/ilyukhaline/unmanaged.yaml").write_text("room: unmanaged\n")
         self.output = self.root / "subscription.txt"
         result = self.run_script(
@@ -700,24 +706,31 @@ class SubscriptionTest(DeployLifecycleTest):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("olcrtc://", result.stdout + result.stderr)
+        self.assertIn("generated 6 profiles", result.stdout)
         return self.output.read_text()
 
     def test_subscription_has_exact_groups_profiles_paths_and_snapshot(self):
         body = self.generate()
         primary = [line for line in body.splitlines() if line.startswith("olcrtc://")]
-        self.assertEqual(4, len(primary))
+        self.assertEqual(6, len(primary))
         expected_names = [
             f"{group} — {profile}"
             for group in ("Германия", "Финляндия")
-            for profile in ("Mamba 4x (пойдет для мобильного интернета)", "VK 4x (обход белых списков)")
+            for profile in (
+                "Mamba 4x (пойдет для мобильного интернета)",
+                "VK 4x (обход белых списков)",
+                "SaluteJazz 4x",
+            )
         ]
         self.assertEqual(expected_names, [line.split("$", 1)[1] for line in primary])
-        self.assertEqual(4, body.count("##group: "))
-        self.assertEqual(4, body.count("##rooms: "))
+        self.assertEqual(6, body.count("##group: "))
+        self.assertEqual(6, body.count("##rooms: "))
         self.assertEqual(0, body.count("##bond-room: "))
-        self.assertNotIn("Multi", body)
+        for unwanted in ("Multi", "telemost", "mtslink"):
+            self.assertNotIn(unwanted, body)
         self.assertEqual(0o600, self.output.stat().st_mode & 0o777)
         self.assertNotIn("unmanaged", body)
+        self.assertEqual(2, sum("salutejazz?datachannel" in line for line in primary))
         for values in (self.values(), self.values()):
             for key, value in values.items():
                 if "_URL_" in key and not key.startswith("TELEMOST"):
@@ -772,13 +785,13 @@ class SubscriptionTest(DeployLifecycleTest):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         rooms = {}
+        providers = {"m": "jitsi", "v": "vkcalls", "t": "telemost", "j": "salutejazz"}
         for label in module.LABELS:
-            provider = {"m": "jitsi", "v": "vkcalls", "t": "telemost"}[label[0]]
             rooms[label] = {
-                "provider": provider,
+                "provider": providers[label[0]],
                 "room": label,
                 "key": "a" * 64,
-                "transport": "datachannel" if label[0] == "m" else "vp8channel",
+                "transport": "datachannel" if label[0] in ("m", "j") else "vp8channel",
             }
         rooms["v1"]["key"] = "b" * 64
         vless = {"host": "127.0.0.1", "port": 10000, "id": "11111111-1111-1111-1111-111111111111"}
@@ -790,6 +803,42 @@ class SubscriptionTest(DeployLifecycleTest):
         self.assertFalse(any(line.startswith("##rooms:") for line in vk))
         self.assertEqual(3, sum(line.startswith("##bond-room:") for line in vk))
         self.assertIn("#" + "b" * 64, vk[0])
+
+    def test_salutejazz_generator_rejects_partial_groups_and_preserves_adopted_keys(self):
+        spec = importlib.util.spec_from_file_location(
+            "subscription_generator", HERE.parent / "deploy/generate_subscription.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import json
+        sections = ["###XRAY", json.dumps({"inbounds": [{"listen": "127.0.0.1", "port": 10000, "settings": {"clients": [{"id": "1" * 32}]}}]})]
+        for prefix, provider, transport, count in (
+            ("m", "jitsi", "datachannel", 4),
+            ("v", "vkcalls", "vp8channel", 4),
+            ("j", "salutejazz", "datachannel", 3),
+        ):
+            for index in range(1, count + 1):
+                sections.extend([
+                    f"###ROOM {prefix}{index}",
+                    f"auth:\n  provider: {provider}\nroom:\n  id: room{index}\ncrypto:\n  key: {'04' * 32}\nnet:\n  transport: {transport}\n",
+                ])
+        bundle = self.root / "partial.bundle"
+        bundle.write_text("\n".join(sections))
+        with self.assertRaisesRegex(ValueError, "SaluteJazz"):
+            module.load_bundle(bundle)
+
+        rooms = {}
+        for prefix, provider, transport in (("m", "jitsi", "datachannel"), ("v", "vkcalls", "vp8channel"), ("j", "salutejazz", "datachannel")):
+            for index in range(1, 5):
+                rooms[f"{prefix}{index}"] = {"provider": provider, "room": f"room{index}", "key": "a" * 64, "transport": transport}
+        rooms["j1"]["key"] = "b" * 64
+        vless = {"host": "127.0.0.1", "port": 10000, "id": "1" * 32}
+        lines = module.render_group("Германия", rooms, vless)
+        start = next(index for index, line in enumerate(lines) if line.endswith("$Германия — SaluteJazz 4x"))
+        jazz = lines[start:]
+        self.assertEqual(3, sum(line.startswith("##bond-room:") for line in jazz))
+        self.assertFalse(any(line.startswith("##rooms:") for line in jazz))
+        self.assertIn("#" + "b" * 64, jazz[0])
 
     def test_publish_installs_only_private_file_and_nginx_location(self):
         body = self.generate()
