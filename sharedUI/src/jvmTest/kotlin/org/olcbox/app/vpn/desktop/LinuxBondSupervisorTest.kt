@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import org.junit.Assume.assumeTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,6 +13,10 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class LinuxBondSupervisorTest {
+    init {
+        assumeTrue(System.getProperty("os.name").startsWith("Linux"))
+    }
+
     @Test
     fun startsEveryRoomAndRestartsOnlyTheDeadOne() = withRunningSupervisor { supervisor, _, pids ->
         val before = pids.toList()

@@ -3,11 +3,16 @@ package org.olcbox.app.vpn.desktop
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import org.junit.Assume.assumeTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 class LinuxTunControllerTest {
+    init {
+        assumeTrue(System.getProperty("os.name").startsWith("Linux"))
+    }
+
     @Test
     fun supervisorNameIsIncludedInCleanupAndLeftoverDetection() {
         val root = Files.createTempDirectory("ilyukhaline-linux-cleanup")
