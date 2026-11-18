@@ -1,3 +1,121 @@
+diff --git a/cmd/olcrtc-salutejazz-room/main.go b/cmd/olcrtc-salutejazz-room/main.go
+new file mode 100644
+index 00000000..a1a2e976
+--- /dev/null
++++ b/cmd/olcrtc-salutejazz-room/main.go
+@@ -0,0 +1,56 @@
++// Package main provisions one anonymous SaluteJazz room for local deployment tooling.
++package main
++
++// ai-generated: the whole command, including validation and provider wiring.
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"regexp"
++	"time"
++
++	"github.com/openlibrecommunity/olcrtc/internal/auth"
++	authSaluteJazz "github.com/openlibrecommunity/olcrtc/internal/auth/salutejazz"
++)
++
++const createTimeout = 30 * time.Second
++
++var (
++	errInvalidRoom = errors.New("invalid SaluteJazz room reference")
++	roomRefRE      = regexp.MustCompile(`^[a-z0-9]{4,16}:[a-z0-9]{4,16}$`)
++)
++
++// ai-generated: run validates the provisioned room before making it observable.
++func run(ctx context.Context, stdout io.Writer, createRoom func(context.Context) (string, error)) error {
++	room, err := createRoom(ctx)
++	if err != nil {
++		return fmt.Errorf("create SaluteJazz room: %w", err)
++	}
++	if !roomRefRE.MatchString(room) {
++		return errInvalidRoom
++	}
++	if _, err := fmt.Fprintln(stdout, room); err != nil {
++		return fmt.Errorf("write SaluteJazz room: %w", err)
++	}
++	return nil
++}
++
++func main() {
++	os.Exit(mainWithExit())
++}
++
++func mainWithExit() int {
++	ctx, cancel := context.WithTimeout(context.Background(), createTimeout)
++	defer cancel()
++	provider := authSaluteJazz.New()
++	if err := run(ctx, os.Stdout, func(ctx context.Context) (string, error) {
++		return provider.CreateRoom(ctx, auth.Config{})
++	}); err != nil {
++		_, _ = fmt.Fprintln(os.Stderr, err)
++		return 1
++	}
++	return 0
++}
+diff --git a/cmd/olcrtc-salutejazz-room/main_test.go b/cmd/olcrtc-salutejazz-room/main_test.go
+new file mode 100644
+index 00000000..11c135dd
+--- /dev/null
++++ b/cmd/olcrtc-salutejazz-room/main_test.go
+@@ -0,0 +1,50 @@
++package main
++
++// ai-generated: unit tests for validated SaluteJazz room provisioning output.
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++)
++
++func TestRunWritesValidatedRoom(t *testing.T) {
++	var stdout strings.Builder
++	err := run(context.Background(), &stdout, func(context.Context) (string, error) {
++		return "abc123:passw0rd", nil
++	})
++	if err != nil {
++		t.Fatalf("run: %v", err)
++	}
++	if got, want := stdout.String(), "abc123:passw0rd\n"; got != want {
++		t.Fatalf("stdout = %q, want %q", got, want)
++	}
++}
++
++func TestRunRejectsCreationFailureAndMalformedRooms(t *testing.T) {
++	tests := []struct {
++		name string
++		room string
++		err  error
++	}{
++		{name: "creation failure", err: errors.New("create failed")},
++		{name: "uppercase", room: "ABC123:passw0rd"},
++		{name: "missing password", room: "abc123"},
++		{name: "extra separator", room: "abc123:passw0rd:extra"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			var stdout strings.Builder
++			err := run(context.Background(), &stdout, func(context.Context) (string, error) {
++				return test.room, test.err
++			})
++			if err == nil {
++				t.Fatal("run succeeded, want error")
++			}
++			if stdout.Len() != 0 {
++				t.Fatalf("stdout = %q, want no room output", stdout.String())
++			}
++		})
++	}
++}
 diff --git a/docs/configuration.md b/docs/configuration.md
 index 22330be8..7cc8e07f 100644
 --- a/docs/configuration.md
