@@ -2469,6 +2469,43 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun refreshKeepsTheWholePreviousListWhenOneBondIsMalformed() = runTest {
+        val key = "a".repeat(64)
+        val vless = "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:10000?security=none&encryption=none#VLESS"
+        fun body(broken: Boolean) = buildString {
+            for (group in listOf("Германия", "Финляндия")) {
+                append("olcrtc://jitsi?datachannel@$group-m1#$key$$group — Mamba 4x\n")
+                append("##rooms: $group-m2, $group-m3, $group-m4\n##bond-vless: $vless\n")
+                append("olcrtc://vkcalls?vp8channel@$group-v1#$key$$group — VK 4x\n")
+                append("##rooms: $group-v2, $group-v3, $group-v4\n##bond-vless: $vless\n")
+                append("olcrtc://jitsi?datachannel@$group-m1#$key$$group — Multi 8x\n")
+                val rooms = listOf("m2", "m3", "m4").map { "jitsi?datachannel@$group-$it" } +
+                    listOf("v1", "v2", "v3", "v4").map { "vkcalls?vp8channel@$group-$it" }
+                rooms.forEachIndexed { index, room ->
+                    if (broken && group == "Финляндия" && index == rooms.lastIndex) {
+                        append("##bond-room: invalid\n")
+                    } else {
+                        append("##bond-room: olcrtc://$room#$key\n")
+                    }
+                }
+                append("##bond-vless: $vless\n")
+            }
+        }
+        var current = body(false)
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(current) }))
+        assertTrue(repo.importText("https://example.test/sub"))
+        val before = repo.getAllLocations().map { it.storageId to it.location.bondedPaths() }
+        assertEquals(6, before.size)
+
+        current = body(true)
+        repo.refreshSubscriptions()
+
+        assertEquals(before, repo.getAllLocations().map { it.storageId to it.location.bondedPaths() })
+        assertTrue(repo.getAllLocations().any { it.location.name == "Финляндия — Multi 8x" })
+    }
+
+    @Test
     fun refreshReplacesTheFailoverRoomsWithWhatTheServerAdvertisesNow() = runTest {
         val key = "c".repeat(64)
         var body = "olcrtc://telemost?vp8channel@R1#$key${'$'}Room\n##rooms: R2"

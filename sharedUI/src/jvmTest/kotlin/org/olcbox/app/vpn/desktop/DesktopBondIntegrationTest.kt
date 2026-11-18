@@ -52,6 +52,25 @@ class DesktopBondIntegrationTest {
     }
 
     @Test
+    fun initialBondUsesTheSessionRouting() {
+        assertTrue("coreRouting = coreRouting" in manager)
+        assertTrue("routing = coreRouting" in manager)
+    }
+
+    @Test
+    fun rebalanceUsesAnActiveRoomSnapshotAndRestoresTheLastWorkingPorts() {
+        val start = manager.indexOf("private suspend fun rebalanceDesktopBond")
+        val end = manager.indexOf("\n    private fun allocateBondPort", start)
+        val body = manager.substring(start, end)
+
+        assertTrue("val previousRoomPorts = desktopBalancedRooms.map" in body)
+        assertTrue("val activeRoomPorts = activeRooms.map" in body)
+        assertTrue("startCores(activeRoomPorts, \"rebalanced\")" in body)
+        assertTrue("startCores(previousRoomPorts, \"restored\")" in body)
+        assertFalse("roomPorts = bond.ports()" in body)
+    }
+
+    @Test
     fun everyTunAttemptHasItsOwnCacheFile() {
         val oldOs = System.getProperty("os.name")
         try {

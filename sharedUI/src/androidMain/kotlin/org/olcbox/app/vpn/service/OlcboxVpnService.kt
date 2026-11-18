@@ -2021,7 +2021,7 @@ class OlcboxVpnService : VpnService() {
                 return@withLock
             }
 
-            activeRooms = bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt())
+            activeRooms = bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt()) { !current() }
             if (!current()) return@withLock
             OlcboxVpnState.setBondRooms(activeRooms)
             bond.requestOccupancy()
@@ -2032,10 +2032,22 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun rebalanceMobileBond(location: LocationConfig, activeRooms: List<Int>): Boolean {
         val upstream = findActiveUpstreamNetwork() ?: return false
+        val previousPorts = bondBalancedRooms.map(bondRoomPorts::get)
         val activePorts = activeRooms.map(bondRoomPorts::get)
         addLog("olcRTC bond rooms changed; rebalancing Xray on ${activeRooms.map { it + 1 }}")
-        if (!startCore(location, false, routingFor(upstream), upstream, bondRoomPorts = activePorts)) return false
-        bondBalancedRooms = activeRooms
+        if (startCore(location, false, routingFor(upstream), upstream, bondRoomPorts = activePorts)) {
+            bondBalancedRooms = activeRooms
+            return true
+        }
+        if (previousPorts.isEmpty()) return false
+
+        addLog("olcRTC bond rebalance failed; restoring the previous paths")
+        if (!startCore(location, false, routingFor(upstream), upstream, bondRoomPorts = previousPorts)) {
+            addLog("olcRTC bond could not restore the previous paths")
+            return false
+        }
+        if (!ensureBridge()) return false
+        addLog("olcRTC bond restored the previous working paths")
         return true
     }
 

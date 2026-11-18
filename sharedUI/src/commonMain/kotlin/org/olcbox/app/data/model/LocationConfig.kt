@@ -68,6 +68,15 @@ data class LocationConfig(
     fun normalized(): LocationConfig {
         val provider = normalizeProvider(bypassProvider)
         val normalizedTransport = normalizeTransport(transport, provider)
+        val normalizedRooms = bondedRoomConfigs.mapNotNull { path ->
+            val normalizedPath = path.normalized()
+            normalizedPath.takeIf {
+                path.room.isNotBlank() &&
+                    path.key.isNotBlank() &&
+                    transportOrNull(path.transport) == normalizedPath.transport &&
+                    normalizedPath.transport in supportedTransportsForProvider(normalizedPath.provider)
+            }
+        }.distinctBy { it.provider to it.room }
         return copy(
             name = name.trim(),
             id = id.trim(),
@@ -81,15 +90,11 @@ data class LocationConfig(
                 .filter { it.isNotBlank() && it != id.trim() }
                 .distinct(),
             bondVlessLink = bondVlessLink?.trim(),
-            bondedRoomConfigs = bondedRoomConfigs.mapNotNull { path ->
-                val normalizedPath = path.normalized()
-                normalizedPath.takeIf {
-                    path.room.isNotBlank() &&
-                        path.key.isNotBlank() &&
-                        transportOrNull(path.transport) == normalizedPath.transport &&
-                        normalizedPath.transport in supportedTransportsForProvider(normalizedPath.provider)
-                }
-            }.distinctBy { it.provider to it.room }
+            bondedRoomConfigs = if (bondedRoomConfigs.isNotEmpty() && normalizedRooms.size != bondedRoomConfigs.size) {
+                bondedRoomConfigs
+            } else {
+                normalizedRooms
+            }
         )
     }
 

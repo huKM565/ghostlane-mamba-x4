@@ -148,6 +148,24 @@ class OlcRtcBondTest {
     }
 
     @Test
+    fun cancelledRecoveryStopsTheCurrentRoomAndStartsNoLaterRooms() {
+        val runtimes = fakes(4)
+        val bond = OlcRtcBond(runtimes)
+        bond.start(12000)
+        bond.recover(12000)
+        runtimes.take(3).forEach { it.running = false }
+        var cancelled = false
+        runtimes[0].onReady = { cancelled = true }
+
+        val active = bond.recover(12000) { cancelled }
+
+        assertEquals(listOf(3), active)
+        assertFalse(runtimes[0].running)
+        assertEquals(2, runtimes[0].startCalls)
+        assertEquals(listOf(1, 1), runtimes.drop(1).take(2).map { it.startCalls })
+    }
+
+    @Test
     fun oneStoppedRuntimeIsExcludedWithoutKillingThePool() {
         val runtimes = fakes(4)
         val bond = OlcRtcBond(runtimes)
@@ -229,17 +247,21 @@ class OlcRtcBondTest {
         var failStop = false
         var failDns = false
         var stopCalls = 0
+        var startCalls = 0
         var stopTimeouts = 0
         var occupancyRequests = 0
         var dns = ""
+        var onReady: (() -> Unit)? = null
 
         override fun start() {
             events += "start-$id"
+            startCalls++
             running = true
         }
 
         override fun waitReady(timeoutMillis: Int) {
             events += "ready-$id-$timeoutMillis"
+            onReady?.invoke()
             if (failReady) throw IllegalStateException("ready-$id")
         }
 

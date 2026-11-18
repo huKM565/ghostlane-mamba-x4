@@ -82,7 +82,7 @@ if action == "show" and units:
 active = root / "active-units"
 current = set(active.read_text().splitlines()) if active.exists() else set()
 if action in ("start", "restart", "enable"):
-    current.update(units)
+    current.update(unit for unit in units if unit != os.environ.get("FAKE_INACTIVE_UNIT"))
 elif action in ("stop", "disable"):
     current.difference_update(units)
 elif action == "is-active":
@@ -490,6 +490,51 @@ class DeployLifecycleTest(DeployPreflightTest):
         secrets.extend(value for key, value in values.items() if "_KEY_" in key or "_URL_" in key)
         for secret in secrets:
             self.assertNotIn(secret, result.stdout + result.stderr)
+    def test_dead_room_service_rolls_back_the_deployment(self):
+        self.build()
+        result = self.deploy(env={"FAKE_INACTIVE_UNIT": "ilyukhaline-olcrtc@m1.service"})
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.remote / "etc/ilyukhaline").exists())
+
+    def test_observer_timeout_never_kills_the_remote_transaction(self):
+        self.build()
+        runner = self.remote / "remote-bin/systemd-run"
+        runner.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os,sys\n"
+            "from pathlib import Path\n"
+            "root=Path(os.environ['FAKE_REMOTE_ROOT'])\n"
+            "unit=next(v.split('=',1)[1] for v in sys.argv if v.startswith('--unit='))\n"
+            "(root / f'{unit}.status').write_text('ActiveState=active\\n')\n"
+        )
+        runner.chmod(0o755)
+        sleeper = self.bin / "sleep"
+        sleeper.write_text("#!/usr/bin/env sh\nexit 0\n")
+        sleeper.chmod(0o755)
+
+        result = self.deploy()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("stop ilyukhaline-deploy", (self.remote / "systemctl.log").read_text())
+
+    def test_multi_inbound_xray_is_not_adopted(self):
+        self.seed_real_german_layout()
+        import json
+        xray = self.remote / "usr/local/etc/xray/config.json"
+        config = json.loads(xray.read_text())
+        config["inbounds"].append({"protocol": "socks", "listen": "127.0.0.1", "port": 1080, "settings": {}})
+        xray.write_text(json.dumps(config))
+        before = xray.read_bytes()
+        active = set((self.remote / "active-units").read_text().splitlines())
+        self.build()
+
+        result = self.deploy()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(before, xray.read_bytes())
+        self.assertEqual(active, set((self.remote / "active-units").read_text().splitlines()))
+        self.assertFalse((self.remote / "etc/ilyukhaline").exists())
+
     def test_disabling_telemost_removes_only_its_managed_rooms(self):
         self.build()
         self.assertEqual(0, self.deploy().returncode)
@@ -677,6 +722,29 @@ class SubscriptionTest(DeployLifecycleTest):
         nginx = self.remote2 / "etc/nginx/sites-enabled/default"
         self.assertIn("server_name example.invalid;", nginx.read_text())
         self.assertIn("include", nginx.read_text())
+
+    def test_publish_restores_live_files_when_a_write_fails(self):
+        self.generate()
+        self.write_config({"PUBLISH_SSH_TARGET": "root@192.0.2.20"})
+        result = self.run_script("--config", str(self.config), "publish", "--input", str(self.output))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        published = self.remote2 / "var/www/ilyukhaline/private.txt"
+        snippet = self.remote2 / "etc/nginx/snippets/ilyukhaline-subscription.conf"
+        server = self.remote2 / "etc/nginx/sites-enabled/default"
+        before = (published.read_bytes(), snippet.read_bytes(), server.read_bytes())
+        installer = self.remote2 / "remote-bin/install"
+        installer.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$*\" == *ilyukhaline-subscription.conf* ]]; then exit 1; fi\n"
+            "exec /usr/bin/install \"$@\"\n"
+        )
+        installer.chmod(0o755)
+        self.output.write_text("replacement")
+
+        result = self.run_script("--config", str(self.config), "publish", "--input", str(self.output))
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(before, (published.read_bytes(), snippet.read_bytes(), server.read_bytes()))
 
     def test_publish_rejects_missing_input_and_unescaped_path(self):
         missing = self.run_script("--config", str(self.config), "publish", "--input", str(self.root / "missing"))

@@ -28,6 +28,7 @@ rollback() {
       rm -f "${snippet}"
     fi
     nginx -t
+    nginx -s reload
   fi
   rm -rf "${stage}"
   exit 1
@@ -46,6 +47,7 @@ fi
 if [ -f "${snippet}" ]; then
   cp -a "${snippet}" "${stage}/snippet.backup"
 fi
+ready=true
 install -m 640 "${stage}/subscription.txt" "${publish_path}.new"
 chgrp www-data "${publish_path}.new"
 mv -f "${publish_path}.new" "${publish_path}"
@@ -56,7 +58,6 @@ if [ ! -f "${server_file}" ]; then
   mkdir -p "$(dirname "${server_file}")"
   printf 'server {\n  listen 80;\n  server_name %s;\n  root /var/www/ilyukhaline;\n}\n' "${host}" > "${server_file}"
 fi
-ready=true
 if [ ! -f "/etc/letsencrypt/live/${host}/fullchain.pem" ]; then
   certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect -d "${host}"
 fi

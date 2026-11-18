@@ -65,6 +65,7 @@ rollback() {
   exit 1
 }
 trap rollback ERR
+trap rollback TERM INT
 
 printf '%s  %s\n' "${olcrtc_hash}" "${stage}/olcrtc" | sha256sum -c -
 printf '%s  %s\n' "${xray_hash}" "${stage}/xray" | sha256sum -c -
@@ -78,7 +79,10 @@ with open('/usr/local/etc/xray/config.json') as stream:
     old = json.load(stream)
 with open(sys.argv[2]) as stream:
     new = json.load(stream)
-old_in = next((item for item in old.get('inbounds', []) if item.get('protocol') == 'vless' and item.get('port') == port), None)
+inbounds = old.get('inbounds', [])
+if len(inbounds) != 1:
+    raise SystemExit(3)
+old_in = next((item for item in inbounds if item.get('protocol') == 'vless' and item.get('port') == port), None)
 new_in = next(item for item in new['inbounds'] if item.get('protocol') == 'vless' and item.get('port') == port)
 if old_in is None:
     raise SystemExit(1)
@@ -91,6 +95,10 @@ PY
     code=$?
     if [ "${code}" -eq 2 ]; then
       printf 'existing Xray UUID differs from the configured VLESS UUID\n' >&2
+      exit 1
+    fi
+    if [ "${code}" -eq 3 ]; then
+      printf 'existing Xray has additional inbounds; refusing to replace it\n' >&2
       exit 1
     fi
   fi
@@ -227,6 +235,17 @@ for unit in "${units[@]}"; do
     continue
   fi
   systemctl restart "${unit}"
+done
+for unit in "${units[@]}"; do
+  state="$(systemctl is-active "${unit}" || true)"
+  if [ "${state}" = active ]; then
+    continue
+  fi
+  if [[ "${unit}" = ilyukhaline-olcrtc@v[1-4].service && "${state}" = activating ]]; then
+    continue
+  fi
+  printf 'managed service did not stay ready: %s (%s)\n' "${unit}" "${state:-unknown}" >&2
+  false
 done
 trap - ERR
 printf 'deployed %s managed services\n' "${#units[@]}"

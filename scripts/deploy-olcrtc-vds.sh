@@ -270,8 +270,8 @@ deploy_remote() {
     fi
     sleep 2
   done
-  ssh_run systemctl stop "${unit}" >/dev/null || true
-  die "remote deployment timed out"
+  ssh_run journalctl -u "${unit}" --no-pager || true
+  die "remote deployment observation timed out; transaction was left running"
 }
 
 status_remote() {

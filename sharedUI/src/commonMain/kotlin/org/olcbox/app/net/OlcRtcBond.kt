@@ -46,18 +46,29 @@ class OlcRtcBond(private val runtimes: List<OlcRtcBondRuntime>) {
         return activeIndexes()
     }
 
-    fun recover(timeoutMillis: Int): List<Int> {
+    fun recover(timeoutMillis: Int, isCancelled: () -> Boolean = { false }): List<Int> {
         runtimes.forEachIndexed { index, runtime ->
             if (index in readyIndexes && runtime.isRunning()) return@forEachIndexed
             readyIndexes.remove(index)
+            if (isCancelled()) return activeIndexes()
             if (!runtime.isRunning()) {
                 runCatching { runtime.stop(timeoutMillis) }
                 runCatching { runtime.start() }
+                if (isCancelled()) {
+                    runCatching { runtime.stop(timeoutMillis) }
+                    return activeIndexes()
+                }
             }
             runCatching {
                 runtime.waitReady(timeoutMillis)
-                readyIndexes += index
+                if (isCancelled()) {
+                    runCatching { runtime.stop(timeoutMillis) }
+                    readyIndexes.remove(index)
+                } else {
+                    readyIndexes += index
+                }
             }
+            if (isCancelled()) return activeIndexes()
         }
         return activeIndexes()
     }

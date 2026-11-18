@@ -101,6 +101,14 @@ class LocationConfigBondTest {
         assertFalse(bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(3)).isComplete())
         assertFalse(bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(5)).isComplete())
         assertFalse(
+            bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(4) + mixedPaths().first())
+                .normalized().isComplete()
+        )
+        assertFalse(
+            bondedConfig().copy(bondedRoomConfigs = mixedPaths().take(8) + mixedPaths().first())
+                .normalized().isComplete()
+        )
+        assertFalse(
             bondedConfig().copy(
                 bondedRoomConfigs = mixedPaths().mapIndexed { index, path ->
                     if (index == 11) mixedPaths()[10] else path

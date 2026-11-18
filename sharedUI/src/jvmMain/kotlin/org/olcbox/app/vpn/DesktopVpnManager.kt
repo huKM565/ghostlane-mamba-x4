@@ -962,6 +962,7 @@ class DesktopVpnManager private constructor(
                             dtlsProfile = dtlsProfile,
                             dnsServer = tunResolvers?.let(DesktopDnsResolver::engineServers)
                                 ?: DesktopDnsResolver.current(),
+                            coreRouting = coreRouting,
                             verboseLogs = verboseLogs,
                         )
                         effectiveSocksPort = frontPort!!
@@ -1767,6 +1768,7 @@ class DesktopVpnManager private constructor(
         socksSettings: DesktopSocksProxySettings,
         dtlsProfile: String,
         dnsServer: String,
+        coreRouting: Routing,
         verboseLogs: Boolean,
     ): Int {
         val config = location.normalized()
@@ -1871,7 +1873,7 @@ class DesktopVpnManager private constructor(
                     socksPort = frontPort,
                     username = login?.username.orEmpty(),
                     password = login?.password.orEmpty(),
-                    routing = Routing.Global,
+                    routing = coreRouting,
                     verboseLogs = verboseLogs,
                     login = login,
                 )
@@ -1933,41 +1935,70 @@ class DesktopVpnManager private constructor(
         addLog("Desktop olcRTC bond rooms changed; rebalancing Xray on ${activeRooms.map { it + 1 }}")
         val spec = LinkParser.parse(line.location.bondVlessLink!!) as? OutboundSpec.Vless
             ?: error("bond carrier is not VLESS")
+        val previousRoomPorts = desktopBalancedRooms.map { bond.rooms[it].port }
+        val activeRoomPorts = activeRooms.map { bond.rooms[it].port }
         val xrayPort = allocateBondPort()
         val frontPort = line.frontPort ?: line.corePort
         val login = SocksLogin.of(line.socksSettings.username, line.socksSettings.password)
+
+        suspend fun startCores(roomPorts: List<Int>, label: String) {
+            xrayCore.start(
+                XrayConfig.buildVlessBond(
+                    spec,
+                    roomPorts = roomPorts,
+                    roomUsername = line.socksSettings.username,
+                    roomPassword = line.socksSettings.password,
+                    socksPort = xrayPort,
+                    verboseLogs = line.verboseLogs,
+                    login = login,
+                )
+            )
+            if (!waitForCoreSocks(xrayPort) { xrayCore.isRunning() }) {
+                error("$label Xray SOCKS not ready on $xrayPort")
+            }
+            singBoxCore.start(
+                SingBoxConfig.buildSocksChain(
+                    xrayPort,
+                    socksPort = frontPort,
+                    username = login?.username.orEmpty(),
+                    password = login?.password.orEmpty(),
+                    routing = line.coreRouting,
+                    verboseLogs = line.verboseLogs,
+                    login = login,
+                )
+            )
+            if (!waitForCoreSocks(frontPort) { singBoxCore.isRunning() && xrayCore.isRunning() }) {
+                error("$label sing-box front not ready on $frontPort")
+            }
+            activeCorePort = frontPort
+        }
+
         stopDesktopCores()
-        xrayCore.start(
-            XrayConfig.buildVlessBond(
-                spec,
-                roomPorts = bond.ports(),
-                roomUsername = line.socksSettings.username,
-                roomPassword = line.socksSettings.password,
-                socksPort = xrayPort,
-                verboseLogs = line.verboseLogs,
-                login = login,
-            )
-        )
-        if (!waitForCoreSocks(xrayPort) { xrayCore.isRunning() }) {
-            error("rebalanced Xray SOCKS not ready on $xrayPort")
+        try {
+            startCores(activeRoomPorts, "rebalanced")
+            desktopBalancedRooms = activeRooms
+            return true
+        } catch (error: CancellationException) {
+            stopDesktopCores()
+            throw error
+        } catch (error: Exception) {
+            addLog("Desktop olcRTC bond rebalance failed: ${error.message}; restoring the previous paths")
+            stopDesktopCores()
         }
-        singBoxCore.start(
-            SingBoxConfig.buildSocksChain(
-                xrayPort,
-                socksPort = frontPort,
-                username = login?.username.orEmpty(),
-                password = login?.password.orEmpty(),
-                routing = line.coreRouting,
-                verboseLogs = line.verboseLogs,
-                login = login,
-            )
-        )
-        if (!waitForCoreSocks(frontPort) { singBoxCore.isRunning() && xrayCore.isRunning() }) {
-            error("rebalanced sing-box front not ready on $frontPort")
+
+        if (previousRoomPorts.isEmpty()) return false
+        return try {
+            startCores(previousRoomPorts, "restored")
+            addLog("Desktop olcRTC bond restored the previous working paths")
+            true
+        } catch (error: CancellationException) {
+            stopDesktopCores()
+            throw error
+        } catch (error: Exception) {
+            addLog("Desktop olcRTC bond restore failed: ${error.message}")
+            stopDesktopCores()
+            false
         }
-        desktopBalancedRooms = activeRooms
-        activeCorePort = frontPort
-        return true
     }
 
     private fun allocateBondPort(): Int = java.net.ServerSocket().use { socket ->

@@ -161,6 +161,25 @@ class OlcboxVpnServiceNativeRunTest {
     }
 
     @Test
+    fun bondRebalanceRestoresTheLastWorkingCoreAfterReplacementFailure() {
+        val body = member("rebalanceMobileBond")
+
+        assertTrue("val previousPorts = bondBalancedRooms.map(bondRoomPorts::get)" in body)
+        val replacement = body.indexOf("bondRoomPorts = activePorts")
+        val rollback = body.indexOf("bondRoomPorts = previousPorts")
+        assertTrue(replacement >= 0, "rebalance does not try the new active ports")
+        assertTrue(rollback > replacement, "rebalance does not restore the previous working ports after a failure")
+        assertTrue("ensureBridge()" in body.substring(rollback), "a restored core on a new port would leave tun2socks on the old one")
+    }
+
+    @Test
+    fun cancelledBondRecoveryIsCooperative() {
+        val body = member("refreshMobileBond")
+
+        assertTrue("bond.recover(OLCRTC_READY_TIMEOUT_MS.toInt()) { !current() }" in body)
+    }
+
+    @Test
     fun cleanupWaitsForRecoveryBeforeStoppingTransportAndStopsItAgainAfterCancelledStart() {
         val cleanup = member("cleanup")
         val watchdogJoin = cleanup.indexOf("cancelledWatchdog?.join()")
