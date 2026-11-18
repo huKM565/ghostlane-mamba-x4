@@ -39,10 +39,33 @@ internal object DesktopPaths {
                 val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
                 (appData?.let { Path(it) } ?: home.resolve("AppData").resolve("Roaming")).resolve("IlyukhaLine")
             }
-            DesktopOs.Linux,
+            DesktopOs.Linux -> home.resolve(".ilyukhaline").also { migrateLinuxData(home, it) }
             DesktopOs.Other -> home.resolve(".olcbox")
         }
         Files.createDirectories(dir)
         return dir
     }
+
+    private fun migrateLinuxData(home: Path, targetDir: Path) {
+        val marker = targetDir.resolve(".ilyukhaline-import-complete")
+        if (Files.exists(marker)) return
+        val sourceDir = home.resolve(".olcbox")
+        Files.createDirectories(targetDir)
+        approvedLinuxMigrations.forEach { name ->
+            val source = sourceDir.resolve(name)
+            val target = targetDir.resolve(name)
+            if (Files.isRegularFile(source) && !Files.exists(target)) {
+                Files.copy(source, target)
+            }
+        }
+        Files.writeString(marker, "")
+    }
+
+    private val approvedLinuxMigrations = listOf(
+        "locations_v4.json",
+        "locations_v3.json",
+        "device_identity",
+        "desktop_socks_proxy_settings.json",
+        "desktop_connection_mode",
+    )
 }
