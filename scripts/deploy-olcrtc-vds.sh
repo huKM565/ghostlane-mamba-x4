@@ -7,6 +7,8 @@ CONFIG=""
 COMMAND=""
 OUTPUT=""
 INPUT=""
+TOOL=""
+ROOMS_FILE=""
 declare -a CONFIGS=()
 declare -a SECRETS=()
 declare -a ROOM_PROVIDERS=()
@@ -17,6 +19,7 @@ declare -a ROOM_KEYS=()
 
 usage() {
   printf 'usage: %s --config FILE [--config FILE] check|build|deploy|status|subscription --output FILE|publish --input FILE\n' "${0##*/}" >&2
+  printf '       %s provision-salutejazz --tool FILE --rooms-file FILE\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -382,7 +385,17 @@ while (($#)); do
       INPUT="$2"
       shift 2
       ;;
-    check|build|deploy|subscription|publish|status)
+    --tool)
+      (($# >= 2)) || usage
+      TOOL="$2"
+      shift 2
+      ;;
+    --rooms-file)
+      (($# >= 2)) || usage
+      ROOMS_FILE="$2"
+      shift 2
+      ;;
+    check|build|deploy|subscription|publish|status|provision-salutejazz)
       [ -z "${COMMAND}" ] || usage
       COMMAND="$1"
       shift
@@ -390,6 +403,13 @@ while (($#)); do
     *) usage ;;
   esac
 done
+if [ "${COMMAND}" = provision-salutejazz ]; then
+  [ "${#CONFIGS[@]}" -eq 0 ] || usage
+  [[ "${TOOL}" = /* && -x "${TOOL}" ]] || die "provision tool must be an absolute executable path"
+  [[ "${ROOMS_FILE}" = /* ]] || die "rooms file must be an absolute path"
+  python3 "${REPO_ROOT}/deploy/provision_salutejazz.py" --tool "${TOOL}" --output "${ROOMS_FILE}"
+  exit $?
+fi
 [ "${#CONFIGS[@]}" -ge 1 ] && [ -n "${COMMAND}" ] || usage
 [ "${#CONFIGS[@]}" -le 2 ] || usage
 if [ "${COMMAND}" != subscription ] && [ "${#CONFIGS[@]}" -ne 1 ]; then
