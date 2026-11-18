@@ -72,6 +72,10 @@ class DesktopOlcRtcBond(
         readyIndexes += index
     }
 
+    fun markNotReady(index: Int) {
+        readyIndexes -= index
+    }
+
     fun activeIndexes(): List<Int> = readyIndexes.filter { rooms[it].alive() }.sorted()
 
     fun recover(): List<Int> {

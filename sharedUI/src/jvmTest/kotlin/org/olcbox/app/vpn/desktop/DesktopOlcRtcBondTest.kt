@@ -169,6 +169,21 @@ class DesktopOlcRtcBondTest {
         assertTrue(rooms.all { !Files.exists(it.configPath) })
     }
 
+    @Test
+    fun restartedRoomDoesNotReturnBeforeMarkedReady() {
+        val replacement = FakeProcess(44)
+        val stopped = rooms(4)[3].copy(restart = { replacement })
+        val bond = DesktopOlcRtcBond(rooms(3) + stopped)
+        (stopped.process as FakeProcess).alive = false
+
+        bond.markNotReady(3)
+        bond.recover()
+
+        assertEquals(listOf(0, 1, 2), bond.activeIndexes())
+        bond.markReady(3)
+        assertEquals(listOf(0, 1, 2, 3), bond.activeIndexes())
+    }
+
     private fun rooms(count: Int): List<DesktopOlcRtcBond.Room> = (1..count).map { index ->
         val path = Files.createTempFile("ilyukhaline-room-$index", ".yaml")
         Files.writeString(path, "test")

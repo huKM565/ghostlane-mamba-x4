@@ -71,6 +71,7 @@ import org.olcbox.app.vpn.desktop.LineChange
 import org.olcbox.app.vpn.desktop.LineConfigs
 import org.olcbox.app.vpn.desktop.LineSupervision
 import org.olcbox.app.vpn.desktop.LinuxKillSwitch
+import org.olcbox.app.vpn.desktop.LinuxBondSupervisor
 import org.olcbox.app.vpn.desktop.MacKillSwitch
 import org.olcbox.app.vpn.desktop.TunnelSettle
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
@@ -302,7 +303,11 @@ class DesktopVpnManager private constructor(
     private var lineGeneration = 0L
     /** Separates adapter names from adapters retained by an earlier app process. */
     private val windowsTunSessionId = UUID.randomUUID().toString().take(8)
-    private val linuxTunController = LinuxTunController(::addLog) { olcRtcConfigNaming() }
+    private val linuxTunController = LinuxTunController(
+        addLog = ::addLog,
+        supervisorNaming = { linuxBondSupervisor?.scriptPath?.toString() },
+        enginesNaming = { olcRtcConfigNaming() },
+    )
     private val windowsTunController = WindowsTunController(::addLog)
     private val macOsTunController = MacOsTunController(::addLog)
 
@@ -327,6 +332,7 @@ class DesktopVpnManager private constructor(
     private var windowsTunInterface: String? = null
     private var windowsTunCacheFile: Path? = null
     private var desktopOlcRtcBond: DesktopOlcRtcBond? = null
+    private var linuxBondSupervisor: LinuxBondSupervisor? = null
     private var desktopBalancedRooms: List<Int> = emptyList()
     private val windowsTunCore = org.olcbox.app.net.DesktopSingBoxController(onOutput = ::onWindowsTunOutput)
 
@@ -955,7 +961,7 @@ class DesktopVpnManager private constructor(
              */
             suspend fun startFirstLine(tunResolvers: List<String>?) {
                 if (isOlcrtc) {
-                    if (isBondedWindows(location, desktopMode)) {
+                    if (isBondedDesktopTun(location, desktopMode)) {
                         frontPort = startDesktopBond(
                             location = location,
                             socksSettings = socksSettings,
@@ -1780,8 +1786,43 @@ class DesktopVpnManager private constructor(
         val launchGeneration = desktopBondGeneration
         val started = mutableListOf<DesktopOlcRtcBond.Room>()
         val readyRooms = mutableSetOf<Int>()
+        var linuxSupervisor: LinuxBondSupervisor? = null
         try {
             val binary = DesktopNativeAssets.resolveOlcRtcBinary()
+            val linuxConfigs = mutableListOf<Path>()
+            fun handleRoomLine(index: Int, launched: Process, line: String) {
+                addLog("rtc: $line")
+                val participants = parseOlcRtcRoomParticipants(line)
+                val roomState = parseOlcRtcRoomState(line)
+                val currentProcess = desktopOlcRtcBond?.rooms?.getOrNull(index)?.process
+                if ((participants != null || roomState != null) &&
+                    launchGeneration == desktopBondGeneration &&
+                    (currentProcess == null || currentProcess === launched)
+                ) {
+                    if (participants != null) setDesktopBondRoomOccupant(index, participants)
+                    if (roomState != null) setDesktopBondRoomState(index, roomState)
+                }
+            }
+            suspend fun readLinuxRoomLog(index: Int, supervisor: LinuxBondSupervisor, launched: Process) {
+                withContext(Dispatchers.IO) {
+                    var reader: java.io.BufferedReader? = null
+                    try {
+                        while (isActive && launchGeneration == desktopBondGeneration && linuxBondSupervisor === supervisor) {
+                            if (reader == null) {
+                                reader = runCatching { Files.newBufferedReader(supervisor.logPath(index)) }.getOrNull()
+                            }
+                            val line = runCatching { reader?.readLine() }.getOrNull()
+                            if (line == null) {
+                                delay(200)
+                            } else {
+                                handleRoomLine(index, launched, line)
+                            }
+                        }
+                    } finally {
+                        runCatching { reader?.close() }
+                    }
+                }
+            }
             paths.forEachIndexed { index, path ->
                 val port = ports[index]
                 val command = OlcRtcCommand(
@@ -1807,6 +1848,10 @@ class DesktopVpnManager private constructor(
                     ".yaml",
                 )
                 Files.writeString(configPath, command.yaml(), StandardCharsets.UTF_8)
+                if (DesktopPaths.os == DesktopOs.Linux) {
+                    linuxConfigs.add(configPath)
+                    return@forEachIndexed
+                }
                 val builder = ProcessBuilder(command.args(configPath)).redirectErrorStream(true)
                 builder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
                 builder.environment()["no_proxy"] = "127.0.0.1,localhost"
@@ -1814,19 +1859,7 @@ class DesktopVpnManager private constructor(
                     val launched = builder.start()
                     scope.launch {
                         launched.inputStream.bufferedReader().useLines { lines ->
-                            lines.forEach { line ->
-                                addLog("rtc: $line")
-                                val participants = parseOlcRtcRoomParticipants(line)
-                                val roomState = parseOlcRtcRoomState(line)
-                                val currentProcess = desktopOlcRtcBond?.rooms?.getOrNull(index)?.process
-                                if ((participants != null || roomState != null) &&
-                                    launchGeneration == desktopBondGeneration &&
-                                    (currentProcess == null || currentProcess === launched)
-                                ) {
-                                    if (participants != null) setDesktopBondRoomOccupant(index, participants)
-                                    if (roomState != null) setDesktopBondRoomState(index, roomState)
-                                }
-                            }
+                            lines.forEach { line -> handleRoomLine(index, launched, line) }
                         }
                     }
                     return launched
@@ -1834,15 +1867,51 @@ class DesktopVpnManager private constructor(
                 val process = launchRoom()
                 started += DesktopOlcRtcBond.Room(process, configPath, port, restart = ::launchRoom)
             }
+            if (DesktopPaths.os == DesktopOs.Linux) {
+                val runtime = Files.createTempDirectory(
+                    olcRtcConfigDir().also { Files.createDirectories(it) },
+                    "${OLCRTC_CONFIG_PREFIX}supervisor-",
+                )
+                val supervisor = LinuxBondSupervisor(binary, linuxConfigs, runtime)
+                linuxSupervisor = supervisor
+                linuxBondSupervisor = supervisor
+                val supervisorProcess = supervisor.start()
+                started += linuxConfigs.mapIndexed { index, configPath ->
+                    DesktopOlcRtcBond.Room(
+                        process = supervisorProcess,
+                        configPath = configPath,
+                        port = ports[index],
+                        isAlive = { supervisor.isRoomUp(index) },
+                    )
+                }
+                scope.launch {
+                    supervisorProcess.inputStream.bufferedReader().useLines { lines ->
+                        lines.forEach { addLog("rtc supervisor: $it") }
+                    }
+                }
+                linuxConfigs.indices.forEach { index ->
+                    scope.launch { readLinuxRoomLog(index, supervisor, supervisorProcess) }
+                }
+            }
             for ((index, room) in started.withIndex()) {
-                if (waitForCoreSocks(room.port) { room.process.isAlive }) {
+                if (waitForCoreSocks(room.port) { room.alive() }) {
                     readyRooms += index
                     break
                 }
-                stopProcess(room.process)
+                if (linuxSupervisor == null) stopProcess(room.process)
                 addLog("olcRTC room ${index + 1} did not become ready; continuing without it")
             }
-            val bond = DesktopOlcRtcBond(started, readyRooms)
+            val supervisor = linuxSupervisor
+            val bond = if (supervisor == null) {
+                DesktopOlcRtcBond(started, readyRooms)
+            } else {
+                DesktopOlcRtcBond(
+                    rooms = started,
+                    readyIndexes = readyRooms,
+                    stopSupervisor = { supervisor.stop() },
+                    runtimeCleanup = { supervisor.deleteRuntime() },
+                )
+            }
             if (!bond.isRunning()) error("no bonded olcRTC rooms are ready")
             desktopOlcRtcBond = bond
             desktopBalancedRooms = bond.activeIndexes()
@@ -1886,13 +1955,29 @@ class DesktopVpnManager private constructor(
             return frontPort
         } catch (error: Throwable) {
             if (desktopOlcRtcBond == null) {
-                started.forEach { room ->
-                    stopProcess(room.process)
-                    runCatching { Files.deleteIfExists(room.configPath) }
+                val supervisor = linuxSupervisor
+                if (supervisor != null) {
+                    val stopped = runCatching { supervisor.stop() }.isSuccess
+                    if (stopped) {
+                        started.forEach { room -> runCatching { Files.deleteIfExists(room.configPath) } }
+                        supervisor.deleteRuntime()
+                        linuxBondSupervisor = null
+                    }
+                } else {
+                    started.forEach { room ->
+                        stopProcess(room.process)
+                        runCatching { Files.deleteIfExists(room.configPath) }
+                    }
                 }
             }
             stopDesktopCores()
-            stopDesktopBond()
+            if (desktopOlcRtcBond != null || linuxSupervisor == null) {
+                stopDesktopBond()
+            } else {
+                desktopBondGeneration++
+                desktopBalancedRooms = emptyList()
+                setDesktopBondRooms(null)
+            }
             throw error
         }
     }
@@ -1914,12 +1999,15 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun recoverDesktopBondRooms(bond: DesktopOlcRtcBond): List<Int> {
+        bond.rooms.forEachIndexed { index, room ->
+            if (!room.alive()) bond.markNotReady(index)
+        }
         bond.recover()
         bond.rooms.forEachIndexed { index, room ->
-            if (room.process.isAlive) {
-                if (waitForCoreSocks(room.port) { room.process.isAlive }) {
+            if (room.alive()) {
+                if (waitForCoreSocks(room.port) { room.alive() }) {
                     bond.markReady(index)
-                } else {
+                } else if (linuxBondSupervisor == null) {
                     stopProcess(room.process)
                 }
             }
@@ -2016,12 +2104,20 @@ class DesktopVpnManager private constructor(
     private fun stopDesktopBond() {
         desktopBondGeneration++
         val bond = desktopOlcRtcBond
+        val supervisor = linuxBondSupervisor
         desktopOlcRtcBond = null
         desktopBalancedRooms = emptyList()
         setDesktopBondRooms(null)
         if (bond != null) {
-            runCatching { bond.stop() }.onFailure { addLog("Desktop olcRTC bond stop failed: ${it.message}") }
-            bond.deleteConfigs()
+            val stopped = runCatching { bond.stop() }.isSuccess
+            if (!stopped) addLog("Desktop olcRTC bond stop failed")
+            if (stopped) bond.deleteConfigs()
+            linuxBondSupervisor = if (stopped) null else supervisor
+        } else if (supervisor != null) {
+            val stopped = runCatching { supervisor.stop() }.isSuccess
+            if (!stopped) addLog("Desktop olcRTC supervisor stop failed")
+            if (stopped) supervisor.deleteRuntime()
+            linuxBondSupervisor = if (stopped) null else supervisor
         }
     }
 
@@ -2398,6 +2494,7 @@ class DesktopVpnManager private constructor(
         if (_status.value is VpnStatus.Disconnected &&
             process == null &&
             desktopOlcRtcBond == null &&
+            linuxBondSupervisor == null &&
             tunProcess == null &&
             !macTunActive
         ) {
@@ -2408,6 +2505,7 @@ class DesktopVpnManager private constructor(
         val wasMacTun = macTunActive
         setStatus(VpnStatus.Stopping)
         cancelProcessJobs()
+        stopDesktopBond()
 
         when (DesktopPaths.os) {
             DesktopOs.Linux -> {
@@ -2495,7 +2593,6 @@ class DesktopVpnManager private constructor(
         pacServer.stop()
 
         stopDesktopCores()
-        stopDesktopBond()
         stopProcess(process)
         process = null
         deleteOlcRtcConfig()
@@ -3052,8 +3149,8 @@ class DesktopVpnManager private constructor(
             // No location to change to. The full restart ends in the error it
             // always has.
             if (active == null || location == null || !location.isComplete()) return false
-            if (isBondedWindows(current.location, current.desktopMode) ||
-                isBondedWindows(location, current.desktopMode)
+            if (isBondedDesktopTun(current.location, current.desktopMode) ||
+                isBondedDesktopTun(location, current.desktopMode)
             ) {
                 addLog("A bonded location change restarts the whole transport")
                 return false
@@ -4447,9 +4544,9 @@ internal fun windowsTunInterfaceName(
     attempt: Int
 ): String = "Ghostlane-$sessionId-${requestGeneration.toString(16)}-${attempt + 1}"
 
-internal fun isBondedWindows(location: LocationConfig, mode: DesktopMode): Boolean =
-    mode == DesktopMode.WindowsTun && location.kind == LocationKind.Olcrtc &&
-        !location.bondVlessLink.isNullOrBlank()
+internal fun isBondedDesktopTun(location: LocationConfig, mode: DesktopMode): Boolean =
+    mode in setOf(DesktopMode.LinuxTun, DesktopMode.WindowsTun) &&
+        location.kind == LocationKind.Olcrtc && !location.bondVlessLink.isNullOrBlank()
 
 internal fun windowsTunCachePath(
     sessionId: String,
