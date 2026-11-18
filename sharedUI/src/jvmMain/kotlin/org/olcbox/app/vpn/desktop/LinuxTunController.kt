@@ -12,6 +12,7 @@ import kotlin.io.path.exists
 
 internal class LinuxTunController(
     private val addLog: (String) -> Unit,
+    private val supervisorNaming: () -> String? = { null },
     /**
      * What every olcRTC engine of this app carries on its command line: the
      * directory and the beginning of the file name of the config it is
@@ -343,8 +344,11 @@ internal class LinuxTunController(
         val removal = if (removeBlockDevice) cleanupScriptContent(statePath) else downScriptContent(statePath)
         // The tunnel's process first, then the engines, then the removal: read
         // from the top of the file, since each is put right under the shebang.
-        val naming = enginesNaming().takeIf { endEngines }
-        val withEngines = if (naming != null) withEnginesEnded(removal, naming) else removal
+        val naming = listOfNotNull(
+            enginesNaming().takeIf { endEngines },
+            supervisorNaming().takeIf { endEngines },
+        )
+        val withEngines = naming.fold(removal) { script, name -> withEnginesEnded(script, name) }
         return writeScript(
             name = CLEANUP_SCRIPT_NAME,
             body = if (endTunnel) withTunnelEnded(withEngines) else withEngines
@@ -497,13 +501,17 @@ internal class LinuxTunController(
      * root's processes too.
      */
     private suspend fun enginesLeft(): Boolean = withContext(Dispatchers.IO) {
-        val naming = enginesNaming()?.toByteArray() ?: return@withContext false
+        val naming = listOfNotNull(enginesNaming(), supervisorNaming()).map { it.toByteArray() }
+        if (naming.isEmpty()) return@withContext false
         runCatching {
             Files.newDirectoryStream(Path("/proc")) { entry ->
                 entry.fileName.toString().all(Char::isDigit)
             }.use { processes ->
                 processes.any { process ->
-                    runCatching { namedIn(Files.readAllBytes(process.resolve("cmdline")), naming) }.getOrDefault(false)
+                    runCatching {
+                        val commandLine = Files.readAllBytes(process.resolve("cmdline"))
+                        naming.any { name -> namedIn(commandLine, name) }
+                    }.getOrDefault(false)
                 }
             }
         }.getOrDefault(false)

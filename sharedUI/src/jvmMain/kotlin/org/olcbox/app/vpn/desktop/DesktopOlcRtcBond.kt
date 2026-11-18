@@ -48,6 +48,8 @@ fun desktopBondWatchDecisionAfterRefresh(
 class DesktopOlcRtcBond(
     val rooms: List<Room>,
     readyIndexes: Set<Int> = rooms.indices.toSet(),
+    private val stopSupervisor: (() -> Unit)? = null,
+    private val runtimeCleanup: () -> Unit = {},
 ) {
     private val readyIndexes = readyIndexes.toMutableSet()
 
@@ -60,18 +62,21 @@ class DesktopOlcRtcBond(
         @Volatile var process: Process,
         val configPath: Path,
         val port: Int,
+        val isAlive: (() -> Boolean)? = null,
         val restart: (() -> Process)? = null,
-    )
+    ) {
+        fun alive(): Boolean = isAlive?.invoke() ?: process.isAlive
+    }
 
     fun markReady(index: Int) {
         readyIndexes += index
     }
 
-    fun activeIndexes(): List<Int> = readyIndexes.filter { rooms[it].process.isAlive }.sorted()
+    fun activeIndexes(): List<Int> = readyIndexes.filter { rooms[it].alive() }.sorted()
 
     fun recover(): List<Int> {
         rooms.forEach { room ->
-            if (room.process.isAlive) return@forEach
+            if (room.alive()) return@forEach
             runCatching { room.restart?.invoke() }
                 .onSuccess { process -> if (process != null) room.process = process }
         }
@@ -82,17 +87,22 @@ class DesktopOlcRtcBond(
 
     fun stop() {
         var firstError: Throwable? = null
-        rooms.forEach { room ->
-            try {
-                val process = room.process
-                if (process.isAlive) {
-                    process.destroy()
-                    if (!process.waitFor(3, TimeUnit.SECONDS)) {
-                        process.destroyForcibly()
+        val stopShared = stopSupervisor
+        if (stopShared != null) {
+            runCatching(stopShared).onFailure { firstError = it }
+        } else {
+            rooms.forEach { room ->
+                try {
+                    val process = room.process
+                    if (process.isAlive) {
+                        process.destroy()
+                        if (!process.waitFor(3, TimeUnit.SECONDS)) {
+                            process.destroyForcibly()
+                        }
                     }
+                } catch (error: Throwable) {
+                    if (firstError == null) firstError = error
                 }
-            } catch (error: Throwable) {
-                if (firstError == null) firstError = error
             }
         }
         readyIndexes.clear()
@@ -103,6 +113,7 @@ class DesktopOlcRtcBond(
         rooms.forEach { room ->
             runCatching { Files.deleteIfExists(room.configPath) }
         }
+        runtimeCleanup()
     }
 
     fun ports(): List<Int> = activeIndexes().map { rooms[it].port }

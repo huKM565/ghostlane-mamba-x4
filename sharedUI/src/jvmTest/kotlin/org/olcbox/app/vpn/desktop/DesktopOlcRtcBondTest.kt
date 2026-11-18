@@ -137,6 +137,38 @@ class DesktopOlcRtcBondTest {
         assertTrue(rooms.all { !Files.exists(it.configPath) })
     }
 
+    @Test
+    fun linuxRoomUsesStateAndNeverRestartsFromKotlin() {
+        val unavailable = rooms(1).single().copy(isAlive = { false }, restart = null)
+        val bond = DesktopOlcRtcBond(listOf(unavailable) + rooms(3).mapIndexed { index, room ->
+            room.copy(configPath = unavailable.configPath.resolveSibling("other-$index.yaml"), port = 21082 + index)
+        })
+
+        assertEquals(listOf(1, 2, 3), bond.activeIndexes())
+        assertEquals(listOf(1, 2, 3), bond.recover())
+        assertEquals(listOf(1, 2, 3), bond.activeIndexes())
+    }
+
+    @Test
+    fun sharedSupervisorStopsExactlyOnce() {
+        val rooms = rooms(4)
+        var stops = 0
+        var cleanups = 0
+        val bond = DesktopOlcRtcBond(
+            rooms = rooms,
+            stopSupervisor = { stops++ },
+            runtimeCleanup = { cleanups++ },
+        )
+
+        bond.stop()
+        bond.deleteConfigs()
+
+        assertEquals(1, stops)
+        assertEquals(1, cleanups)
+        assertTrue(rooms.all { (it.process as FakeProcess).alive })
+        assertTrue(rooms.all { !Files.exists(it.configPath) })
+    }
+
     private fun rooms(count: Int): List<DesktopOlcRtcBond.Room> = (1..count).map { index ->
         val path = Files.createTempFile("ilyukhaline-room-$index", ".yaml")
         Files.writeString(path, "test")
