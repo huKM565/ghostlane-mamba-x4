@@ -18,7 +18,7 @@ declare -a stale_units=()
 declare -a stale_active=()
 declare -a units=(ilyukhaline-xray.service)
 for label in "${room_labels[@]}"; do
-  [[ "${label}" =~ ^[mvtj][1-4]$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
+  [[ "${label}" =~ ^(m([1-9]|1[0-2])|[vtj][1-4])$ ]] || { printf 'invalid managed room label\n' >&2; exit 1; }
   units+=("ilyukhaline-olcrtc@${label}.service")
 done
 for label in t1 t2 t3 t4; do

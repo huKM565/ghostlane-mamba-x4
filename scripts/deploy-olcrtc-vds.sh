@@ -111,8 +111,14 @@ load_config() {
     . "${rooms_file}"
     providers+=(SALUTEJAZZ)
   fi
+  local mamba_count="${MAMBA_COUNT:-4}"
+  [[ "${mamba_count}" =~ ^(4|8|12)$ ]] || die "MAMBA_COUNT must be 4, 8 or 12"
   for provider in "${providers[@]}"; do
-    for index in 1 2 3 4; do
+    local room_count=4
+    if [ "${provider}" = MAMBA ]; then
+      room_count="${mamba_count}"
+    fi
+    for ((index = 1; index <= room_count; index++)); do
       name="${provider}_URL_${index}"
       require_value "${name}"
       url="${!name}"
@@ -129,13 +135,11 @@ load_config() {
         [[ "${url}" =~ ^https://telemost\.yandex\.ru/j/[A-Za-z0-9_-]+$ ]] ||
           die "TELEMOST_URL_${index} must be a permanent clean https://telemost.yandex.ru/j/ROOM URL"
       fi
-      for previous in 1 2 3 4; do
-        if ((previous < index)); then
-          other="${provider}_URL_${previous}"
-          other_key="${provider}_KEY_${previous}"
-          [ "${url}" != "${!other}" ] || die "duplicate ${provider} room URL at indexes ${previous} and ${index}"
-          [ "${key}" = "${!other_key}" ] || die "${provider} keys must match for the ##rooms subscription format"
-        fi
+      for ((previous = 1; previous < index; previous++)); do
+        other="${provider}_URL_${previous}"
+        other_key="${provider}_KEY_${previous}"
+        [ "${url}" != "${!other}" ] || die "duplicate ${provider} room URL at indexes ${previous} and ${index}"
+        [ "${key}" = "${!other_key}" ] || die "${provider} keys must match for the ##rooms subscription format"
       done
       ROOM_PROVIDERS+=("${provider,,}")
       if [ "${provider}" = SALUTEJAZZ ]; then

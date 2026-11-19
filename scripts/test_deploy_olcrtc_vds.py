@@ -768,6 +768,54 @@ class SubscriptionTest(DeployLifecycleTest):
         self.assertNotIn("ilyukhaline-olcrtc@t1.service", active)
         self.assertEqual(9, len(active.splitlines()))
 
+    def test_mamba_pool_size_eight_and_twelve(self):
+        for count in (8, 12):
+            with self.subTest(count=count):
+                self.setUp()
+                changes = {"TELEMOST_ENABLED": "false", "MAMBA_COUNT": str(count)}
+                for index in range(5, count + 1):
+                    changes[f"MAMBA_URL_{index}"] = f"https://mamba.example.invalid/room-{index}"
+                    changes[f"MAMBA_KEY_{index}"] = "01" * 32
+                self.write_config(changes)
+                build = self.run_script("--config", str(self.config), "build")
+                self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+                result = self.run_script("--config", str(self.config), "deploy")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                active = (self.remote / "active-units").read_text()
+                for index in range(1, count + 1):
+                    self.assertIn(f"ilyukhaline-olcrtc@m{index}.service", active)
+                self.assertNotIn(f"ilyukhaline-olcrtc@m{count + 1}.service", active)
+                status = self.run_script("--config", str(self.config), "status")
+                self.assertIn(f"M{count} mamba active", status.stdout)
+
+        self.write_config({"MAMBA_COUNT": "5", "MAMBA_URL_5": "https://mamba.example.invalid/room-5", "MAMBA_KEY_5": "01" * 32})
+        result = self.run_script("--config", str(self.config), "check")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("MAMBA_COUNT", result.stderr)
+
+    def test_mamba_generator_supports_eight_and_twelve_rooms(self):
+        spec = importlib.util.spec_from_file_location(
+            "subscription_generator", HERE.parent / "deploy/generate_subscription.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import json
+        for count in (8, 12):
+            with self.subTest(count=count):
+                sections = ["###XRAY", json.dumps({"inbounds": [{"listen": "127.0.0.1", "port": 10000, "settings": {"clients": [{"id": "1" * 32}]}}]})]
+                for prefix, provider, transport, size in (("m", "jitsi", "datachannel", count), ("v", "vkcalls", "vp8channel", 4)):
+                    for index in range(1, size + 1):
+                        sections.extend([
+                            f"###ROOM {prefix}{index}",
+                            f"auth:\n  provider: {provider}\nroom:\n  id: room{index}\ncrypto:\n  key: {'04' * 32}\nnet:\n  transport: {transport}\n",
+                        ])
+                bundle = self.root / f"mamba-{count}.bundle"
+                bundle.write_text("\n".join(sections))
+                rooms, vless = module.load_bundle(bundle)
+                lines = module.render_group("Германия", rooms, vless)
+                self.assertTrue(lines[0].endswith(f"Германия — Mamba {count}x (пойдет для мобильного интернета)"))
+                self.assertEqual(count - 1, lines[2].count(",") + 1)
+
     def test_subscription_fields_strip_supported_yaml_quotes(self):
         spec = importlib.util.spec_from_file_location(
             "subscription_generator", HERE.parent / "deploy/generate_subscription.py"

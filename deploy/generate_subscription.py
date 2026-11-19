@@ -5,9 +5,12 @@ import os
 import re
 from pathlib import Path
 
-LABELS = tuple(f"{provider}{index}" for provider in "mvtj" for index in range(1, 5))
+LABELS = tuple(
+    [f"m{index}" for index in range(1, 13)]
+    + [f"{provider}{index}" for provider in "vtj" for index in range(1, 5)]
+)
 PROFILES = (
-    ("Mamba 4x (пойдет для мобильного интернета)", "m"),
+    ("Mamba", "m"),
     ("VK 4x (обход белых списков)", "v"),
     ("Телемост 4x", "t"),
     ("SaluteJazz 4x", "j"),
@@ -26,7 +29,7 @@ def field(text, name):
 
 def load_bundle(path):
     text = Path(path).read_text()
-    parts = re.split(r"(?m)^###(XRAY|ROOM [mvtj][1-4])\n", text)
+    parts = re.split(r"(?m)^###(XRAY|ROOM (?:m(?:[1-9]|1[0-2])|[vtj][1-4]))\n", text)
     sections = {}
     for index in range(1, len(parts), 2):
         sections[parts[index]] = parts[index + 1]
@@ -43,7 +46,7 @@ def load_bundle(path):
     for label in LABELS:
         config = sections.get(f"ROOM {label}")
         if config is None:
-            if label[0] in "mv":
+            if label[0] == "v" or (label[0] == "m" and int(label[1:]) <= 4):
                 raise ValueError(f"managed bundle has no room {label}")
             continue
         room = {
@@ -55,6 +58,9 @@ def load_bundle(path):
         if any(char in room["room"] for char in "\r\n#"):
             raise ValueError(f"room {label} contains an unsafe character")
         rooms[label] = room
+    mamba_count = sum(label.startswith("m") for label in rooms)
+    if mamba_count not in (4, 8, 12):
+        raise ValueError("managed bundle has an incomplete Mamba group")
     for prefix, name in (("t", "Telemost"), ("j", "SaluteJazz")):
         count = sum(label.startswith(prefix) for label in rooms)
         if count not in (0, 4):
@@ -82,9 +88,11 @@ def render_group(group, rooms, vless):
     for profile, prefix in PROFILES:
         if f"{prefix}1" not in rooms:
             continue
-        selected = [rooms[f"{prefix}{index}"] for index in range(1, 5)]
+        count = sum(label.startswith(prefix) for label in rooms) if prefix == "m" else 4
+        selected = [rooms[f"{prefix}{index}"] for index in range(1, count + 1)]
         keys = {room["key"] for room in selected}
-        output.append(olc_link(selected[0], f"{group} — {profile}"))
+        profile_name = f"{profile} {count}x (пойдет для мобильного интернета)" if prefix == "m" else profile
+        output.append(olc_link(selected[0], f"{group} — {profile_name}"))
         output.append(f"##group: {group}")
         if len(keys) == 1:
             output.append("##rooms: " + ", ".join(room["room"] for room in selected[1:]))
