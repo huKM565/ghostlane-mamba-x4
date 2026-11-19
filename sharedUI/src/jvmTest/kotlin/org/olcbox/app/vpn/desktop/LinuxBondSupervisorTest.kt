@@ -47,6 +47,29 @@ class LinuxBondSupervisorTest {
     }
 
     @Test
+    fun missingStateIsAliveWhileSupervisorIsStarting() {
+        val root = Files.createTempDirectory("ilyukhaline-supervisor-starting")
+        val process = ProcessBuilder("bash", "-c", "sleep 30").start()
+        val supervisor = LinuxBondSupervisor(
+            binary = fakeEngine(root),
+            configPaths = configs(root),
+            runtimeDir = root.resolve("runtime"),
+            privilege = { it },
+            launcher = { process },
+        )
+        try {
+            supervisor.start()
+
+            assertTrue(supervisor.isRoomAlive(0))
+            Files.writeString(supervisor.statePath(0), "down\n")
+            assertFalse(supervisor.isRoomAlive(0))
+        } finally {
+            process.destroyForcibly()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun startUsesOnePrivilegedInvocation() {
         val root = Files.createTempDirectory("ilyukhaline-supervisor-command")
         val commands = mutableListOf<List<String>>()

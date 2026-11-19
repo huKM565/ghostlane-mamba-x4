@@ -1882,7 +1882,7 @@ class DesktopVpnManager private constructor(
                         process = supervisorProcess,
                         configPath = configPath,
                         port = ports[index],
-                        isAlive = { supervisor.isRoomUp(index) },
+                        isAlive = { supervisor.isRoomAlive(index) },
                     )
                 }
                 scope.launch {

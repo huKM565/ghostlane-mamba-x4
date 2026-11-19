@@ -31,7 +31,7 @@ class DesktopBondIntegrationTest {
         val body = section("private suspend fun startDesktopBond", "private suspend fun refreshDesktopBond")
         assertEquals(1, Regex("LinuxBondSupervisor\\(").findAll(body).count())
         assertFalse("LinuxPrivilege.command" in body)
-        assertTrue("supervisor.isRoomUp(index)" in body)
+        assertTrue("supervisor.isRoomAlive(index)" in body)
         assertTrue("supervisor.logPath(index)" in body)
         assertTrue("XrayConfig.buildVlessBond" in body)
         assertTrue("SingBoxConfig.buildSocksChain" in body)

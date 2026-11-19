@@ -46,9 +46,12 @@ internal class LinuxBondSupervisor(
     fun logPath(index: Int): Path = runtimeDir.resolve("room-${index + 1}.log")
     fun statePath(index: Int): Path = runtimeDir.resolve("room-${index + 1}.state")
 
-    fun isRoomUp(index: Int): Boolean = runCatching {
-        Files.readString(statePath(index)).trim() == "up"
-    }.getOrDefault(false)
+    fun isRoomAlive(index: Int): Boolean {
+        if (process?.isAlive != true) return false
+        return runCatching {
+            Files.readString(statePath(index)).trim() != "down"
+        }.getOrDefault(true)
+    }
 
     fun deleteRuntime() {
         if (process?.isAlive == true) error("cannot delete a running supervisor runtime")
