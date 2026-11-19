@@ -20,7 +20,15 @@ class BondRoomStatusTest {
 
         assertEquals(
             listOf("M1", "M2", "M3", "M4", "V1", "V2", "V3", "V4", "T1", "T2", "T3", "T4", "J1", "J2", "J3", "J4"),
-            providers.mapIndexed(::bondRoomLabel),
+            bondRoomLabels(providers),
+        )
+    }
+
+    @Test
+    fun labelsStayUniqueAcrossTwelveRooms() {
+        assertEquals(
+            listOf("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12"),
+            bondRoomLabels(List(12) { "jitsi" }),
         )
     }
 

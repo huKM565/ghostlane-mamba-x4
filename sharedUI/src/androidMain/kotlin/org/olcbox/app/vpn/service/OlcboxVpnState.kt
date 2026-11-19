@@ -11,6 +11,7 @@ import org.olcbox.app.vpn.SystemVpnMode
 import org.olcbox.app.data.model.BondRoomConfig
 import org.olcbox.app.vpn.BondRoomError
 import org.olcbox.app.vpn.BondRoomStatus
+import org.olcbox.app.vpn.bondRoomLabels
 import org.olcbox.app.vpn.TrafficCounters
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.TunnelHold
@@ -44,8 +45,9 @@ object OlcboxVpnState {
 
     @Synchronized
     fun configureBondRooms(paths: List<BondRoomConfig>) {
-        _bondRoomStates.value = paths.mapIndexed { index, path ->
-            BondRoomStatus(org.olcbox.app.vpn.bondRoomLabel(index, path.provider), active = false)
+        val labels = bondRoomLabels(paths.map { it.provider })
+        _bondRoomStates.value = paths.mapIndexed { index, _ ->
+            BondRoomStatus(labels[index], active = false)
         }
         bondRelayReady = List(paths.size) { false }
         bondRawOccupants = List(paths.size) { null }

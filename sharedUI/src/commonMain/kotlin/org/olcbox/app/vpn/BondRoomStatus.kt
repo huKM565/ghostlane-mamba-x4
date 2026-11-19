@@ -19,13 +19,23 @@ fun displayedOccupants(raw: Int?, relayReady: Boolean): Int? {
 }
 
 fun bondRoomLabel(index: Int, provider: String): String {
-    val suffix = index % 4 + 1
+    val suffix = index + 1
     return when (LocationConfig.normalizeProvider(provider)) {
         LocationConfig.PROVIDER_JITSI -> "M$suffix"
         LocationConfig.PROVIDER_VKCALLS -> "V$suffix"
         LocationConfig.PROVIDER_TELEMOST -> "T$suffix"
         LocationConfig.PROVIDER_SALUTEJAZZ -> "J$suffix"
         else -> "R${index + 1}"
+    }
+}
+
+fun bondRoomLabels(providers: List<String>): List<String> {
+    val indices = mutableMapOf<String, Int>()
+    return providers.map { provider ->
+        val normalized = LocationConfig.normalizeProvider(provider)
+        val index = indices[normalized] ?: 0
+        indices[normalized] = index + 1
+        bondRoomLabel(index, normalized)
     }
 }
 

@@ -140,8 +140,9 @@ class DesktopVpnManager private constructor(
 
     @Synchronized
     private fun configureDesktopBondRooms(paths: List<org.olcbox.app.data.model.BondRoomConfig>) {
-        _bondRoomStates.value = paths.mapIndexed { index, path ->
-            BondRoomStatus(bondRoomLabel(index, path.provider), active = false)
+        val labels = bondRoomLabels(paths.map { it.provider })
+        _bondRoomStates.value = paths.mapIndexed { index, _ ->
+            BondRoomStatus(labels[index], active = false)
         }
         desktopBondRelayReady = List(paths.size) { false }
         desktopBondRawOccupants = List(paths.size) { null }
